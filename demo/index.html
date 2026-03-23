@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>S1NTA | Unified Underground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --accent: #ffd600;
+      }
+      body {
+        background: #000;
+        color: #fff;
+        font-family: "Inter", sans-serif;
+        overflow-x: hidden;
+        cursor: crosshair;
+      }
+
+      /* PERSISTENT VISUALS */
+      .grain {
+        position: fixed;
+        inset: 0;
+        opacity: 0.05;
+        pointer-events: none;
+        z-index: 99;
+        background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+      }
+      .spotlight {
+        position: fixed;
+        inset: 0;
+        background: radial-gradient(
+          circle at var(--x, 50%) var(--y, 50%),
+          rgba(255, 214, 0, 0.06) 0%,
+          rgba(0, 0, 0, 0) 60%
+        );
+        pointer-events: none;
+        z-index: 1;
+        transition: opacity 0.5s ease;
+      }
+
+      /* ANIMATIONS */
+      .reveal {
+        opacity: 0;
+        transform: translateY(40px);
+        filter: blur(8px);
+        transition: all 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .reveal.active {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+
+      .glow-hover:hover {
+        box-shadow: 0 0 30px rgba(255, 214, 0, 0.1);
+        border-color: rgba(255, 214, 0, 0.3);
+        transform: translateY(-5px);
+      }
+
+      .stutter-text {
+        letter-spacing: 0.6em;
+        text-transform: uppercase;
+        font-size: 10px;
+        color: #555;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 2px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grain"></div>
+    <div class="spotlight" id="spotlight"></div>
+
+    <nav
+      class="fixed top-0 w-full z-50 flex justify-between p-8 md:p-10 mix-blend-difference"
+    >
+      <a
+        href="#"
+        onclick="route('home')"
+        class="font-black text-2xl tracking-tighter uppercase select-none"
+        >S1NTA</a
+      >
+      <div class="space-x-8 text-[10px] uppercase tracking-[0.3em] font-light">
+        <a
+          href="#"
+          onclick="route('shop')"
+          class="hover:text-[--accent] transition-colors"
+          >Shop</a
+        >
+        <a
+          href="#"
+          onclick="toggleCart()"
+          class="hover:text-[--accent] transition-colors"
+          >Cart (<span id="cart-count">0</span>)</a
+        >
+      </div>
+    </nav>
+
+    <main id="view-container" class="relative z-10"></main>
+
+    <div id="cart-panel" class="fixed inset-0 z-[60] pointer-events-none">
+      <div
+        id="cart-bg"
+        class="absolute inset-0 bg-black/60 backdrop-blur-md opacity-0 transition-opacity duration-500"
+        onclick="toggleCart()"
+      ></div>
+      <div
+        id="cart-content"
+        class="absolute right-0 top-0 h-full w-full max-w-md bg-[#050505] border-l border-white/5 translate-x-full transition-transform duration-500 p-12 flex flex-col pointer-events-auto shadow-2xl"
+      >
+        <div class="flex justify-between items-center mb-12">
+          <h2
+            class="text-[10px] uppercase tracking-[0.5em] font-bold text-zinc-400"
+          >
+            Archive_Current
+          </h2>
+          <button
+            onclick="toggleCart()"
+            class="text-zinc-600 hover:text-white uppercase text-[9px]"
+          >
+            Close [x]
+          </button>
+        </div>
+        <div
+          id="cart-items"
+          class="flex-grow space-y-8 overflow-y-auto custom-scrollbar"
+        >
+          <p class="text-zinc-700 text-[10px] uppercase tracking-widest italic">
+            Archive empty.
+          </p>
+        </div>
+        <div class="pt-8 border-t border-white/5">
+          <button
+            onclick="
+              route('checkout');
+              toggleCart();
+            "
+            class="w-full bg-white text-black py-5 text-[10px] font-black uppercase tracking-[0.4em] hover:bg-[--accent] transition-all"
+          >
+            Proceed to Checkout
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const views = {
+        home: `
+                <section class="h-screen flex flex-col justify-center items-center px-6">
+                    <div class="reveal active text-center">
+                        <h1 class="text-[14vw] font-black leading-none uppercase tracking-tighter mb-4 select-none">
+                            S1N<span class="text-transparent" style="-webkit-text-stroke: 1px white;">TA</span>
+                        </h1>
+                        <p class="max-w-xs mx-auto text-zinc-500 text-[10px] tracking-[0.5em] uppercase font-light leading-relaxed">
+                            Emerging from the shadows. <br> Controlled chaos.
+                        </p>
+                    </div>
+                    <div class="absolute bottom-12 flex flex-col items-center opacity-20">
+                        <span class="text-[8px] tracking-[0.3em] uppercase mb-4">Explore</span>
+                        <div class="w-[1px] h-16 bg-white"></div>
+                    </div>
+                </section>
+
+                <section class="min-h-screen flex items-center px-12 md:px-32 py-20">
+                    <div class="grid md:grid-cols-2 gap-20 items-center w-full">
+                        <div class="reveal">
+                            <span class="text-[--accent] font-mono text-xs tracking-widest uppercase">01 // THE SHELL</span>
+                            <h2 class="text-5xl font-bold uppercase tracking-tighter mt-4 mb-8">Emerge from <br>the Static.</h2>
+                            <p class="text-zinc-500 text-sm leading-relaxed max-w-sm uppercase tracking-wider mb-10">
+                                A silhouette that absorbs light and deflects attention. Designed for the quiet observer.
+                            </p>
+                            <button onclick="addToCart('Vantage Cloak', 210)" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.4em] hover:bg-white hover:text-black transition-all">Add to Archive — $210</button>
+                        </div>
+                        <div class="reveal relative">
+                            <div class="aspect-[3/4] bg-[#050505] border border-white/5 flex items-center justify-center overflow-hidden glow-hover transition-all duration-700">
+                                <div class="w-48 h-64 bg-zinc-900 opacity-40 blur-2xl"></div>
+                                <span class="absolute text-[9px] uppercase tracking-[0.4em] text-zinc-600">Product_Fragment_01</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="h-[40vh] flex items-center justify-center italic text-zinc-700">
+                    <p class="reveal text-[10px] tracking-[1.2em] uppercase">Something is always there.</p>
+                </section>
+
+                <section class="min-h-screen flex items-center px-12 md:px-32 py-20">
+                    <div class="grid md:grid-cols-2 gap-20 items-center w-full">
+                        <div class="reveal order-2 md:order-1 relative">
+                             <div class="aspect-square bg-[#050505] border border-white/5 flex items-center justify-center glow-hover transition-all duration-700">
+                                <div class="w-3/4 h-3/4 border-dashed border border-zinc-800 rotate-45"></div>
+                             </div>
+                        </div>
+                        <div class="reveal order-1 md:order-2">
+                            <span class="text-[--accent] font-mono text-xs tracking-widest uppercase">02 // THE LINE</span>
+                            <h2 class="text-5xl font-bold uppercase tracking-tighter mt-4 mb-8">Linear <br>Rebellion.</h2>
+                            <p class="text-zinc-500 text-sm leading-relaxed max-w-sm uppercase tracking-wider mb-10">
+                                Precision cuts for a chaotic world. Structured, intentional, and permanent.
+                            </p>
+                            <button onclick="addToCart('Linear Pant', 185)" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.4em] hover:bg-white hover:text-black transition-all">Add to Archive — $185</button>
+                        </div>
+                    </div>
+                </section>
+
+                <footer class="py-60 text-center">
+                    <div class="reveal">
+                        <h2 class="text-xs tracking-[0.8em] uppercase text-zinc-500 mb-12">End of Chapter One</h2>
+                        <button onclick="route('shop')" class="text-3xl font-black uppercase tracking-tighter hover:text-[--accent] transition-colors">Enter Full Archive</button>
+                    </div>
+                </footer>
+            `,
+        shop: `
+                <section class="max-w-6xl mx-auto px-6 py-40 page-enter">
+                    <div class="mb-20 border-b border-white/5 pb-4 flex justify-between items-end">
+                        <h2 class="text-[10px] uppercase tracking-[0.8em] text-zinc-500">Shop / All_Arrivals</h2>
+                        <span class="text-[9px] text-zinc-700 uppercase tracking-widest">Total: 04</span>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-24">
+                        ${[
+                          "Core Fragment",
+                          "Shadow Shell",
+                          "Linear Pant",
+                          "Void Tee",
+                        ]
+                          .map(
+                            (name, i) => `
+                            <div class="group glow-hover border border-white/5 p-6 transition-all duration-700">
+                                <div class="aspect-[4/5] bg-[#050505] mb-8 flex items-center justify-center relative overflow-hidden">
+                                    <div class="w-full h-full bg-gradient-to-tr from-zinc-900 to-black opacity-30"></div>
+                                    <button onclick="addToCart('${name}', 200)" class="absolute bottom-6 opacity-0 group-hover:opacity-100 bg-white text-black px-10 py-3 text-[9px] font-bold uppercase tracking-widest transition-all">Add +</button>
+                                </div>
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <h3 class="uppercase text-sm tracking-widest font-bold">${name}</h3>
+                                        <p class="text-[10px] text-zinc-600 mt-2 tracking-widest uppercase">Series 0${i + 1}</p>
+                                    </div>
+                                    <span class="text-[--accent] font-mono">$200</span>
+                                </div>
+                            </div>
+                        `,
+                          )
+                          .join("")}
+                    </div>
+                </section>
+            `,
+        checkout: `
+                <section class="max-w-4xl mx-auto px-6 py-40 page-enter">
+                    <div class="text-center mb-20">
+                        <h2 class="text-[10px] uppercase tracking-[1em] text-zinc-500">Secure_Terminal</h2>
+                    </div>
+                    <div class="grid md:grid-cols-2 gap-20">
+                        <div class="space-y-12">
+                            <div>
+                                <label class="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">01 / IDENTIFICATION</label>
+                                <input type="text" placeholder="SHIPPING_EMAIL" class="w-full bg-transparent border-b border-white/10 py-4 text-[10px] outline-none focus:border-[--accent] transition-colors uppercase">
+                            </div>
+                            <div>
+                                <label class="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">02 / TRANSACTION</label>
+                                <input type="text" placeholder="CARD_NUMBER" class="w-full bg-transparent border-b border-white/10 py-4 text-[10px] outline-none focus:border-[--accent] transition-colors uppercase">
+                            </div>
+                            <button class="w-full bg-white text-black py-4 text-[10px] font-black uppercase tracking-[0.4em] hover:bg-[--accent] transition-all">Finalize Manifest</button>
+                        </div>
+                        <div class="bg-[#050505] border border-white/5 p-10 h-fit sticky top-32">
+                            <p class="text-[9px] uppercase tracking-[0.4em] mb-8 text-zinc-500 italic border-b border-white/5 pb-4">Order_Summary</p>
+                            <div id="checkout-total" class="text-3xl font-black font-mono text-[--accent]">$0.00</div>
+                            <p class="text-[8px] text-zinc-700 uppercase mt-4 tracking-widest leading-relaxed">By finalizing, you accept the terms of the rebellion.</p>
+                        </div>
+                    </div>
+                </section>
+            `,
+      };
+
+      // --- CORE ENGINE ---
+      function route(viewName) {
+        const container = document.getElementById("view-container");
+        container.innerHTML = views[viewName] || views.home;
+        window.scrollTo(0, 0);
+        initScrollReveal();
+        updateCartUI();
+      }
+
+      function initScrollReveal() {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) entry.target.classList.add("active");
+            });
+          },
+          { threshold: 0.1 },
+        );
+        document
+          .querySelectorAll(".reveal")
+          .forEach((el) => observer.observe(el));
+      }
+
+      // --- CART LOGIC ---
+      let cart = [];
+      function toggleCart() {
+        const panel = document.getElementById("cart-content");
+        const bg = document.getElementById("cart-bg");
+        panel.classList.toggle("translate-x-full");
+        bg.classList.toggle("opacity-0");
+        document
+          .getElementById("cart-panel")
+          .classList.toggle("pointer-events-none");
+      }
+
+      function addToCart(name, price) {
+        cart.push({ name, price });
+        updateCartUI();
+        toggleCart();
+      }
+
+      function updateCartUI() {
+        document.getElementById("cart-count").innerText = cart.length;
+        const itemsList = document.getElementById("cart-items");
+        const checkoutTotal = document.getElementById("checkout-total");
+
+        if (cart.length === 0) {
+          itemsList.innerHTML = `<p class="text-zinc-700 text-[10px] uppercase italic tracking-widest">Archive empty.</p>`;
+        } else {
+          itemsList.innerHTML = cart
+            .map(
+              (item) => `
+                    <div class="flex justify-between text-[10px] uppercase tracking-widest border-b border-white/5 pb-4">
+                        <span class="text-zinc-400">${item.name}</span>
+                        <span>$${item.price}</span>
+                    </div>
+                `,
+            )
+            .join("");
+        }
+        const total = cart.reduce((sum, item) => sum + item.price, 0);
+        if (checkoutTotal) checkoutTotal.innerText = `$${total.toFixed(2)}`;
+      }
+
+      // --- SPOTLIGHT ---
+      document.addEventListener("mousemove", (e) => {
+        const spotlight = document.getElementById("spotlight");
+        spotlight.style.setProperty(
+          "--x",
+          `${(e.clientX / window.innerWidth) * 100}%`,
+        );
+        spotlight.style.setProperty(
+          "--y",
+          `${(e.clientY / window.innerHeight) * 100}%`,
+        );
+      });
+
+      // Initialize
+      route("home");
+    </script>
+  </body>
+</html>
