@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>S1NTA | Unified Underground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --accent: #ffd600;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        background: #000;
+        color: #fff;
+        font-family: "Inter", sans-serif;
+        overflow-x: hidden;
+        cursor: crosshair;
+      }
+
+      /* PERSISTENT VISUALS */
+      .grain {
+        position: fixed;
+        inset: 0;
+        opacity: 0.05;
+        pointer-events: none;
+        z-index: 99;
+        background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+      }
+      .spotlight {
+        position: fixed;
+        inset: 0;
+        background: radial-gradient(
+          circle at var(--x, 50%) var(--y, 50%),
+          rgba(255, 214, 0, 0.06) 0%,
+          rgba(0, 0, 0, 0) 60%
+        );
+        pointer-events: none;
+        z-index: 1;
+        transition: opacity 0.5s ease;
+      }
+
+      /* BACKGROUND STORYTELLING LAYER */
+      #story-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      .story-rect {
+        position: absolute;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.03);
+        background: #050505;
+        /* Flashlight effect: 0.15 base visibility, 1.0 at center of mask */
+        mask-image: radial-gradient(
+          circle 200px at var(--mx, 50%) var(--my, 50%),
+          rgba(0, 0, 0, 1) 0%,
+          rgba(0, 0, 0, 0.15) 100%
+        );
+        -webkit-mask-image: radial-gradient(
+          circle 200px at var(--mx, 50%) var(--my, 50%),
+          rgba(0, 0, 0, 1) 0%,
+          rgba(0, 0, 0, 0.15) 100%
+        );
+        opacity: 0.6;
+        transition: transform 0.2s ease-out;
+      }
+      .story-rect img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        filter: grayscale(100%) contrast(110%);
+        opacity: 0.4;
+      }
+      .story-content-fallback {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5em;
+        color: rgba(255,255,255,0.1);
+        background: linear-gradient(45deg, #080808, #000);
+        z-index: -1;
+      }
+      .hero-logo-bg {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 50vw;
+        min-width: 420px;
+        max-width: 900px;
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 0.06;
+        pointer-events: none;
+        z-index: -1;
+      }
+      @media (max-width: 767px) {
+        .hero-logo-bg {
+          width: 72vw;
+          min-width: 0;
+          max-width: 280px;
+          transform: translate(-50%, -50%) scale(0.88);
+        }
+        #story-layer .story-rect {
+          opacity: 0;
+          transition: opacity 0.45s ease;
+        }
+        #story-layer .story-rect.story-scroll-active {
+          opacity: 0.55;
+        }
+        #story-layer .story-rect img {
+          transform: scale(0.82);
+          transform-origin: center center;
+        }
+        .mobile-bottom-accent {
+          position: fixed;
+          bottom: 0;
+          right: 0;
+          z-index: 0;
+          width: min(48vw, 240px);
+          height: min(48vw, 240px);
+          pointer-events: none;
+          overflow: hidden;
+          opacity: 0.42;
+          transition: opacity 0.45s ease;
+          transform: rotate(-3deg) translate(-6%, -10%);
+        }
+        .mobile-bottom-accent img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          filter: grayscale(100%) contrast(110%);
+        }
+      }
+
+      /* ANIMATIONS */
+      .reveal {
+        opacity: 0;
+        transform: translateY(40px);
+        filter: blur(8px);
+        transition: all 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .reveal.active {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+
+      .asset-tilt {
+        transform: rotate(-1.5deg);
+        transition:
+          transform 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+          box-shadow 0.7s,
+          border-color 0.7s;
+      }
+
+      /* One transform stack so tilt + frame stay sharp (avoids jagged 1px rings) */
+      .asset-tilt.index-visual-highlight {
+        transform: rotate(-1.5deg) translateZ(0);
+        will-change: transform;
+      }
+
+      .index-visual-highlight {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+        max-width: 28rem;
+        padding: 2px;
+        border-radius: 2px;
+        border: 2px solid rgba(255, 214, 0, 0.95);
+        background: linear-gradient(
+          145deg,
+          rgba(255, 214, 0, 0.55),
+          rgba(255, 236, 120, 0.22),
+          rgba(255, 214, 0, 0.42)
+        );
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.9),
+          0 0 32px rgba(255, 214, 0, 0.35),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+        backface-visibility: hidden;
+        isolation: isolate;
+      }
+      .index-visual-highlight .index-visual-inner {
+        background: #050505;
+        overflow: hidden;
+        line-height: 0;
+      }
+      .index-visual-highlight img {
+        display: block;
+        width: 100%;
+        height: auto;
+        max-height: min(72vh, 520px);
+        object-fit: contain;
+        vertical-align: top;
+      }
+      @media (max-width: 767px) {
+        .index-visual-highlight img {
+          max-height: min(48vh, 360px);
+        }
+        .index-visual-highlight.index-visual-tight img {
+          max-height: min(52vh, 400px);
+        }
+      }
+      /* Second index: frame hugs intrinsic image size—no letterboxing */
+      .index-visual-highlight.index-visual-tight {
+        width: fit-content;
+        max-width: min(28rem, 100%);
+      }
+      .index-visual-highlight.index-visual-tight img {
+        width: auto;
+        max-width: min(28rem, 100%);
+        max-height: min(78vh, 560px);
+        height: auto;
+        object-fit: unset;
+      }
+      .asset-tilt.index-visual-highlight.glow-hover:hover {
+        transform: translate3d(0, -4px, 0) rotate(-1deg);
+        border-color: rgba(255, 214, 0, 1);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.95),
+          0 0 48px rgba(255, 214, 0, 0.45),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+      }
+
+      .glow-hover:hover {
+        box-shadow: 0 0 30px rgba(255, 214, 0, 0.1);
+        border-color: rgba(255, 214, 0, 0.3);
+        transform: translateY(-5px);
+      }
+
+      .stutter-text {
+        letter-spacing: 0.6em;
+        text-transform: uppercase;
+        font-size: 10px;
+        color: #555;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 2px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grain"></div>
+    <div class="spotlight" id="spotlight"></div>
+    <div id="story-layer">
+      <div class="story-rect w-64 h-96 top-[12%] left-[9%]" style="transform: rotate(-4deg);">
+        <img src="demo/assets/image_1.png" alt="" onerror="this.style.display='none'">
+        <div class="story-content-fallback">Fragment_01</div>
+      </div>
+      <div class="story-rect w-80 h-[500px] top-[30%] right-[4%]" style="transform: rotate(3deg);">
+        <img src="demo/assets/image_2.png" alt="" onerror="this.style.display='none'">
+        <div class="story-content-fallback">Manifesto_Static</div>
+      </div>
+      <div class="story-rect w-72 h-72 bottom-[10%] left-[30%]" style="transform: rotate(-2deg);">
+        <img src="demo/assets/image_3.png" alt="" onerror="this.style.display='none'">
+        <div class="story-content-fallback">Subject_Beta</div>
+      </div>
+      <div class="story-rect w-64 h-80 top-[10%] left-[50%]" style="transform: rotate(2deg);">
+        <img src="demo/assets/image_4.png" alt="" onerror="this.style.display='none'">
+        <div class="story-content-fallback">Archive_04</div>
+      </div>
+    </div>
+
+    <div
+      id="mobile-bottom-accent"
+      class="mobile-bottom-accent md:hidden"
+      aria-hidden="true"
+    >
+      <img src="demo/assets/image_3.png" alt="" onerror="this.style.display='none'" />
+    </div>
+
+    <nav
+      class="fixed top-0 z-50 flex w-full items-center justify-between p-5 text-white md:p-10"
+    >
+      <a
+        href="#"
+        onclick="route('home'); closeNavMobile(); return false;"
+        class="font-black text-xl tracking-tighter uppercase select-none md:text-2xl"
+        >S1NTA</a
+      >
+      <div
+        class="hidden flex-wrap items-center justify-end gap-x-8 gap-y-2 text-[10px] font-light uppercase tracking-[0.3em] md:flex"
+      >
+        <a
+          href="#"
+          onclick="route('archive'); return false;"
+          class="transition-colors hover:text-[--accent]"
+          >Archive</a
+        >
+        <a
+          href="#"
+          onclick="toggleCart(); return false;"
+          class="transition-colors hover:text-[--accent]"
+          >Cart (<span class="js-cart-count">0</span>)</a
+        >
+        <button
+          type="button"
+          onclick="openAuth(); return false;"
+          class="transition-colors hover:text-[--accent]"
+        >
+          LOG IN
+        </button>
+      </div>
+      <button
+        type="button"
+        onclick="toggleNavMobile()"
+        class="flex h-10 w-10 flex-col items-center justify-center gap-1.5 rounded border border-white/15 text-white transition hover:border-[--accent]/40 md:hidden"
+        aria-expanded="false"
+        aria-controls="nav-mobile-panel"
+        id="nav-burger-btn"
+        aria-label="Open menu"
+      >
+        <span class="h-px w-5 bg-current"></span>
+        <span class="h-px w-5 bg-current"></span>
+        <span class="h-px w-5 bg-current"></span>
+      </button>
+    </nav>
+
+    <div
+      id="nav-mobile-drawer"
+      class="pointer-events-none fixed inset-0 z-[55] md:hidden"
+    >
+      <div
+        id="nav-mobile-bg"
+        class="absolute inset-0 bg-black/75 opacity-0 transition-opacity duration-300"
+        onclick="closeNavMobile()"
+      ></div>
+      <div
+        id="nav-mobile-panel"
+        class="absolute right-0 top-0 flex h-full w-[min(100%,20rem)] max-w-sm translate-x-full flex-col border-l border-white/10 bg-[#050505] px-8 pb-10 pt-20 shadow-2xl transition-transform duration-300"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Site menu"
+      >
+        <button
+          type="button"
+          onclick="closeNavMobile()"
+          class="absolute right-6 top-6 text-[10px] uppercase tracking-widest text-zinc-500 hover:text-white"
+        >
+          Close [x]
+        </button>
+        <div class="flex flex-col gap-8 text-[10px] font-light uppercase tracking-[0.35em]">
+          <a
+            href="#"
+            onclick="route('archive'); closeNavMobile(); return false;"
+            class="border-b border-white/5 pb-4 transition-colors hover:text-[--accent]"
+            >Archive</a
+          >
+          <a
+            href="#"
+            onclick="toggleCart(); closeNavMobile(); return false;"
+            class="border-b border-white/5 pb-4 transition-colors hover:text-[--accent]"
+            >Cart (<span class="js-cart-count">0</span>)</a
+          >
+          <button
+            type="button"
+            onclick="openAuth(); closeNavMobile(); return false;"
+            class="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
+          >
+            LOG IN
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <main id="view-container" class="relative z-10"></main>
+
+    <div id="auth-panel" class="fixed inset-0 z-[62] pointer-events-none">
+      <div
+        id="auth-bg"
+        class="absolute inset-0 bg-black/60 backdrop-blur-md opacity-0 transition-opacity duration-500"
+        onclick="closeAuth()"
+      ></div>
+      <div
+        id="auth-content"
+        class="absolute left-0 top-0 flex h-full w-full max-w-md -translate-x-full flex-col border-r border-white/5 bg-[#050505] p-8 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12"
+      >
+        <div class="mb-10 flex items-center justify-between">
+          <h2 class="text-[10px] font-bold uppercase tracking-[0.5em] text-zinc-400">
+            Access_Demo
+          </h2>
+          <button
+            type="button"
+            onclick="closeAuth()"
+            class="text-[9px] uppercase text-zinc-600 hover:text-white"
+          >
+            Close [x]
+          </button>
+        </div>
+        <p class="mb-8 text-[9px] uppercase leading-relaxed tracking-widest text-zinc-600">
+          Phone-only sign-in preview. No codes or accounts are created—demo UI only.
+        </p>
+        <div class="mb-8 flex gap-2 border-b border-white/10 pb-1">
+          <button
+            type="button"
+            id="auth-tab-login"
+            onclick="setAuthTab('login')"
+            class="auth-tab flex-1 border-b-2 border-[--accent] py-3 text-[9px] font-bold uppercase tracking-widest text-white"
+          >
+            Log in
+          </button>
+          <button
+            type="button"
+            id="auth-tab-signup"
+            onclick="setAuthTab('signup')"
+            class="auth-tab flex-1 border-b-2 border-transparent py-3 text-[9px] font-bold uppercase tracking-widest text-zinc-500"
+          >
+            Sign up
+          </button>
+        </div>
+        <label class="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600" for="auth-phone"
+          >Mobile number</label
+        >
+        <input
+          id="auth-phone"
+          type="tel"
+          inputmode="tel"
+          autocomplete="tel"
+          placeholder="+264 …"
+          class="mb-8 w-full border-b border-white/10 bg-transparent py-4 text-[10px] uppercase tracking-widest outline-none transition-colors placeholder:text-zinc-700 focus:border-[--accent]"
+        />
+        <button
+          type="button"
+          onclick="handleAuthDemoSubmit()"
+          class="mt-auto w-full bg-white py-5 text-[10px] font-black uppercase tracking-[0.4em] text-black transition-all hover:bg-[--accent]"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+
+    <div id="cart-panel" class="fixed inset-0 z-[60] pointer-events-none">
+      <div
+        id="cart-bg"
+        class="absolute inset-0 bg-black/60 backdrop-blur-md opacity-0 transition-opacity duration-500"
+        onclick="toggleCart()"
+      ></div>
+      <div
+        id="cart-content"
+        class="absolute right-0 top-0 flex h-full w-full max-w-md translate-x-full flex-col border-l border-white/5 bg-[#050505] p-8 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12"
+      >
+        <div class="flex justify-between items-center mb-12">
+          <h2
+            class="text-[10px] uppercase tracking-[0.5em] font-bold text-zinc-400"
+          >
+            Archive_Current
+          </h2>
+          <button
+            onclick="toggleCart()"
+            class="text-zinc-600 hover:text-white uppercase text-[9px]"
+          >
+            Close [x]
+          </button>
+        </div>
+        <div
+          id="cart-items"
+          class="flex-grow space-y-8 overflow-y-auto custom-scrollbar"
+        >
+          <p class="text-zinc-700 text-[10px] uppercase tracking-widest italic">
+            Archive empty.
+          </p>
+        </div>
+        <div id="cart-summary" class="hidden border-t border-white/5 pt-6">
+          <p class="mb-1 text-[9px] uppercase tracking-widest text-zinc-500">
+            Subtotal
+          </p>
+          <p
+            id="cart-total"
+            class="font-mono text-2xl font-black text-[--accent]"
+          >
+            N$0.00
+          </p>
+        </div>
+        <div class="pt-8 border-t border-white/5">
+          <button
+            type="button"
+            onclick="handleDemoCheckout()"
+            class="w-full bg-white py-5 text-[10px] font-black uppercase tracking-[0.4em] text-black transition-all hover:bg-[--accent]"
+          >
+            Proceed to Checkout
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const archiveProducts = [
+        {
+          name: "Skully",
+          price: 179.99,
+          image: "demo/assets/skully.png",
+          desc: "Skully drop—built for cold nights and louder fits. Stack it, bend the silhouette, wear the attitude before the caption.",
+        },
+        {
+          name: "Original",
+          price: 249.99,
+          image: "demo/assets/original.png",
+          desc: "The house line in its pure form—what S1NTA sounds like before remixes. Street unity, leader energy, tomorrow’s uniform.",
+        },
+        {
+          name: "Valentine",
+          price: 249.99,
+          image: "demo/assets/valentines.png",
+          desc: "A softer strike—still code, still S1NTA. For the ones who move with love in the cut and steel in the stance.",
+        },
+      ];
+
+      function escapeAttr(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;");
+      }
+
+      function buildArchiveHTML() {
+        const cards = archiveProducts
+          .map((p) => {
+            const searchBlob = escapeAttr(
+              `${p.name} ${p.desc}`.toLowerCase(),
+            );
+            const priceStr = Number(p.price).toFixed(2);
+            return `
+            <article
+              class="archive-product group glow-hover border border-white/5 p-4 transition-all duration-700 md:p-6"
+              data-archive-search="${searchBlob}"
+            >
+              <div class="relative mx-auto aspect-square w-full max-w-[min(92vw,min(38vh,320px))] overflow-hidden bg-[#050505] md:max-w-[min(100%,min(40.6vh,364px))] lg:max-w-[min(100%,min(47.6vh,434px))]">
+                <img
+                  src="${escapeAttr(p.image)}"
+                  alt=""
+                  class="mx-auto h-full w-full max-h-full max-w-full object-contain p-4 transition duration-500 group-hover:brightness-[0.45]"
+                  onerror="this.style.display='none'"
+                />
+                <div class="pointer-events-none absolute inset-0 bg-black/0 transition duration-500 group-hover:bg-black/40"></div>
+                <div class="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4 opacity-0 transition duration-500 group-hover:pointer-events-auto group-hover:opacity-100 md:pb-5">
+                  <button
+                    type="button"
+                    data-add-to-cart
+                    data-product-name="${escapeAttr(p.name)}"
+                    data-product-price="${p.price}"
+                    class="pointer-events-auto bg-white px-10 py-3 text-[9px] font-bold uppercase tracking-widest text-black transition hover:bg-[--accent]"
+                  >
+                    Add +
+                  </button>
+                </div>
+              </div>
+              <div class="mt-4 flex items-end justify-between gap-4 border-t border-white/5 pt-4 max-md:flex-col max-md:items-center max-md:text-center md:mt-6">
+                <h3 class="text-xs font-bold uppercase tracking-widest md:text-sm">${p.name}</h3>
+                <span class="shrink-0 font-mono text-sm tabular-nums text-[--accent]">N$${priceStr}</span>
+              </div>
+            </article>
+          `;
+          })
+          .join("");
+        return `
+                <section class="page-enter mx-auto max-w-[1320px] px-4 py-24 md:px-6 md:py-40">
+                    <div class="mb-8 flex flex-col gap-6 border-b border-white/5 pb-6 md:mb-10 md:flex-row md:items-end md:justify-between md:pb-8">
+                        <div>
+                            <h2 class="text-[10px] uppercase tracking-[0.8em] text-zinc-500">Archive / All_Arrivals</h2>
+                            <p class="mt-2 text-[9px] uppercase tracking-widest text-zinc-700">
+                                <span id="archive-result-count">${archiveProducts.length}</span> entries
+                            </p>
+                        </div>
+                        <div class="w-full md:max-w-sm">
+                            <label for="archive-search" class="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600">Search</label>
+                            <input
+                                id="archive-search"
+                                type="search"
+                                autocomplete="off"
+                                placeholder="Filter by name, keyword…"
+                                class="w-full border border-white/10 bg-transparent px-4 py-3 text-[10px] uppercase tracking-widest outline-none transition-colors placeholder:text-zinc-700 focus:border-[--accent]"
+                            />
+                        </div>
+                    </div>
+                    <div id="archive-grid" class="grid grid-cols-1 gap-x-8 gap-y-14 md:grid-cols-3 md:gap-x-12 md:gap-y-20 lg:gap-x-24">
+                        ${cards}
+                    </div>
+                </section>
+            `;
+      }
+
+      function initArchiveSearch() {
+        const input = document.getElementById("archive-search");
+        const grid = document.getElementById("archive-grid");
+        const countEl = document.getElementById("archive-result-count");
+        if (!input || !grid) return;
+        const run = () => {
+          const q = input.value.trim().toLowerCase();
+          const cards = grid.querySelectorAll(".archive-product");
+          let n = 0;
+          cards.forEach((card) => {
+            const blob = (card.getAttribute("data-archive-search") || "").toLowerCase();
+            const show = !q || blob.includes(q);
+            card.classList.toggle("hidden", !show);
+            if (show) n += 1;
+          });
+          if (countEl) countEl.textContent = String(n);
+        };
+        input.addEventListener("input", run);
+        run();
+      }
+
+      const views = {
+        home: `
+                <section class="h-screen flex flex-col justify-center items-center px-5 max-md:min-h-[100dvh] md:px-6">
+                    <div class="reveal active relative flex w-full flex-col items-center text-center">
+                        <img src="demo/assets/logo.png" alt="" class="hero-logo-bg" onerror="this.style.display='none'" />
+                        <h1 class="w-full text-[11vw] font-black leading-none uppercase tracking-tighter mb-3 select-none md:mb-4 md:text-[14vw]">
+                            S1N<span class="text-transparent" style="-webkit-text-stroke: 1px white;">TA</span>
+                        </h1>
+                        <p class="max-w-md px-2 text-zinc-500 text-[10px] uppercase font-light leading-relaxed tracking-[0.28em] md:text-sm md:tracking-[0.35em] lg:tracking-[0.45em]">
+                            To the world
+                        </p>
+                        <button
+                          type="button"
+                          onclick="scrollToNextSection()"
+                          class="group mx-auto mt-10 flex w-max flex-col items-center gap-3 text-zinc-500 transition-colors hover:text-[--accent]"
+                          aria-label="Scroll to next section"
+                        >
+                          <span class="text-[8px] uppercase tracking-[0.35em]">Scroll</span>
+                          <span class="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 transition group-hover:border-[--accent]/50">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                              <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                          </span>
+                        </button>
+                    </div>
+                    <div class="absolute bottom-12 flex flex-col items-center opacity-20">
+                        <span class="text-[8px] tracking-[0.3em] uppercase mb-4">Explore</span>
+                        <div class="w-[1px] h-16 bg-white"></div>
+                    </div>
+                </section>
+
+                <section id="home-next-section" class="flex min-h-screen items-center scroll-mt-8 px-6 py-20 max-md:text-center md:px-12 md:py-32 lg:px-24">
+                    <div class="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-16 max-md:justify-items-center md:grid-cols-2 md:gap-24">
+                      <div class="reveal max-md:flex max-md:flex-col max-md:items-center">
+                        <span class="text-[--accent] font-mono text-[9px] tracking-widest uppercase md:text-[10px]">Index // 01</span>
+                        <h2 class="mt-5 mb-8 text-4xl font-bold uppercase leading-[0.95] tracking-tighter max-md:max-w-sm md:mt-6 md:mb-10 md:text-6xl">Four Angles, <br>One Stance.</h2>
+                        <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
+                          Four panels, one kid in the beanie—same moment, different read. It’s not a layout flex; it’s permission to twist the fit until it feels like yours. That’s the thread: street unity, stubborn love, and a look that moves before the caption does.
+                        </p>
+                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                      </div>
+                      <div class="reveal relative flex w-full justify-center max-md:max-w-sm md:justify-end">
+                        <div class="asset-tilt index-visual-highlight glow-hover w-full max-w-md transition-all duration-700 max-md:mx-auto md:ml-auto">
+                          <div class="index-visual-inner">
+                            <img src="demo/assets/visual_1.png" alt="" onerror="this.style.display='none'">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="flex min-h-screen items-center px-6 py-20 max-md:text-center md:px-12 md:py-32 lg:px-24">
+                    <div class="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-16 max-md:justify-items-center md:grid-cols-2 md:gap-24">
+                      <div class="reveal order-2 flex justify-center max-md:order-2 max-md:max-w-sm md:order-1 md:justify-start">
+                        <div class="asset-tilt index-visual-highlight index-visual-tight glow-hover transition-all duration-700">
+                          <div class="index-visual-inner">
+                            <img src="demo/assets/visual_2.png" alt="" onerror="this.style.display='none'">
+                          </div>
+                        </div>
+                      </div>
+                      <div class="reveal order-1 max-md:flex max-md:flex-col max-md:items-center md:order-2">
+                        <span class="text-[--accent] font-mono text-[9px] tracking-widest uppercase md:text-[10px]">Index // 02</span>
+                        <h2 class="mt-5 mb-8 text-4xl font-bold uppercase leading-[0.95] tracking-tighter max-md:max-w-sm md:mt-6 md:mb-10 md:text-6xl">Three Bodies, <br>One Line.</h2>
+                        <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
+                          No solo poster child—three bodies sharing the same light, same line on the chest. It reads less like a campaign and more like a night you can already hear: laughter, stance, the brand as shorthand between friends. That’s the movement—not a moodboard.
+                        </p>
+                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="flex min-h-screen items-center px-6 py-20 max-md:text-center md:px-12 md:py-32 lg:px-24">
+                    <div class="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-16 max-md:justify-items-center md:grid-cols-2 md:gap-24">
+                      <div class="reveal max-md:flex max-md:flex-col max-md:items-center">
+                        <span class="text-[--accent] font-mono text-[9px] tracking-widest uppercase md:text-[10px]">Index // 03</span>
+                        <h2 class="mt-5 mb-8 text-4xl font-bold uppercase leading-[0.95] tracking-tighter max-md:max-w-sm md:mt-6 md:mb-10 md:text-6xl">Laid On <br>Concrete.</h2>
+                        <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
+                          Shirts pressed to concrete like a map someone needed you to walk. No hanger, no apology—just spacing, weight, and the story told flat before anyone performs it. The street gets the first draft; the crowd gets the echo.
+                        </p>
+                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                      </div>
+                      <div class="reveal relative flex w-full justify-center max-md:max-w-sm md:justify-end">
+                        <div class="asset-tilt index-visual-highlight glow-hover w-full max-w-md transition-all duration-700 max-md:mx-auto md:ml-auto">
+                          <div class="index-visual-inner">
+                            <img src="demo/assets/visual_3.png" alt="" onerror="this.style.display='none'">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                <footer class="px-6 py-24 text-center md:py-60">
+                    <div class="reveal">
+                        <h2 class="mb-8 text-[10px] uppercase tracking-[0.55em] text-zinc-500 md:mb-12 md:text-xs md:tracking-[0.8em]">On To The Next Chapter</h2>
+                        <button onclick="route('archive')" class="text-2xl font-black uppercase tracking-tighter transition-colors hover:text-[--accent] md:text-3xl">Enter Full Archive</button>
+                    </div>
+                </footer>
+            `,
+        checkout: `
+                <section class="max-w-4xl mx-auto px-6 py-40 page-enter">
+                    <div class="text-center mb-20">
+                        <h2 class="text-[10px] uppercase tracking-[1em] text-zinc-500">Secure_Terminal</h2>
+                    </div>
+                    <div class="grid md:grid-cols-2 gap-20">
+                        <div class="space-y-12">
+                            <div>
+                                <label class="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">01 / IDENTIFICATION</label>
+                                <input type="text" placeholder="SHIPPING_EMAIL" class="w-full bg-transparent border-b border-white/10 py-4 text-[10px] outline-none focus:border-[--accent] transition-colors uppercase">
+                            </div>
+                            <div>
+                                <label class="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">02 / TRANSACTION</label>
+                                <input type="text" placeholder="CARD_NUMBER" class="w-full bg-transparent border-b border-white/10 py-4 text-[10px] outline-none focus:border-[--accent] transition-colors uppercase">
+                            </div>
+                            <button class="w-full bg-white text-black py-4 text-[10px] font-black uppercase tracking-[0.4em] hover:bg-[--accent] transition-all">Finalize Manifest</button>
+                        </div>
+                        <div class="bg-[#050505] border border-white/5 p-10 h-fit sticky top-32">
+                            <p class="text-[9px] uppercase tracking-[0.4em] mb-8 text-zinc-500 italic border-b border-white/5 pb-4">Order_Summary</p>
+                            <div id="checkout-total" class="text-3xl font-black font-mono text-[--accent]">N$0.00</div>
+                            <p class="text-[8px] text-zinc-700 uppercase mt-4 tracking-widest leading-relaxed">By finalizing, you accept the terms of the rebellion.</p>
+                        </div>
+                    </div>
+                </section>
+            `,
+      };
+
+      function scrollToNextSection() {
+        const el = document.getElementById("home-next-section");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
+
+      let storyScrollMobileBound = false;
+      function initStoryLayerScrollMobile() {
+        if (storyScrollMobileBound) return;
+        storyScrollMobileBound = true;
+        const layer = document.getElementById("story-layer");
+        if (!layer) return;
+        const rects = Array.from(layer.querySelectorAll(".story-rect"));
+        if (!rects.length) return;
+        const mq = window.matchMedia("(max-width: 767px)");
+
+        function updateMobileBottomAccentScroll() {
+          const accent = document.getElementById("mobile-bottom-accent");
+          if (!accent) return;
+          if (!mq.matches) {
+            accent.style.opacity = "";
+            return;
+          }
+          const y = window.scrollY || window.pageYOffset;
+          const fadeEnd = Math.max(180, window.innerHeight * 0.32);
+          const t = Math.min(1, y / fadeEnd);
+          const maxOp = 0.42;
+          accent.style.opacity = String(maxOp * (1 - t));
+        }
+
+        function updateStoryScrollActive() {
+          if (!mq.matches) {
+            rects.forEach((r) => r.classList.remove("story-scroll-active"));
+            updateMobileBottomAccentScroll();
+            return;
+          }
+          const doc = Math.max(
+            1,
+            document.documentElement.scrollHeight - window.innerHeight,
+          );
+          const y = window.scrollY || window.pageYOffset;
+          const t = Math.min(1, y / doc);
+          const idx = Math.min(rects.length - 1, Math.floor(t * rects.length));
+          rects.forEach((r, i) => {
+            r.classList.toggle("story-scroll-active", i === idx);
+          });
+          updateMobileBottomAccentScroll();
+        }
+
+        window.addEventListener("scroll", updateStoryScrollActive, {
+          passive: true,
+        });
+        window.addEventListener("resize", updateStoryScrollActive);
+        if (mq.addEventListener) {
+          mq.addEventListener("change", updateStoryScrollActive);
+        } else if (mq.addListener) {
+          mq.addListener(updateStoryScrollActive);
+        }
+        updateStoryScrollActive();
+      }
+
+      function closeNavMobile() {
+        const panel = document.getElementById("nav-mobile-panel");
+        const bg = document.getElementById("nav-mobile-bg");
+        const root = document.getElementById("nav-mobile-drawer");
+        const btn = document.getElementById("nav-burger-btn");
+        if (!panel || !bg || !root) return;
+        panel.classList.add("translate-x-full");
+        bg.classList.add("opacity-0");
+        root.classList.add("pointer-events-none");
+        if (btn) {
+          btn.setAttribute("aria-expanded", "false");
+          btn.setAttribute("aria-label", "Open menu");
+        }
+      }
+
+      function toggleNavMobile() {
+        const panel = document.getElementById("nav-mobile-panel");
+        const bg = document.getElementById("nav-mobile-bg");
+        const root = document.getElementById("nav-mobile-drawer");
+        const btn = document.getElementById("nav-burger-btn");
+        if (!panel || !bg || !root) return;
+        const closed = panel.classList.contains("translate-x-full");
+        if (closed) {
+          panel.classList.remove("translate-x-full");
+          bg.classList.remove("opacity-0");
+          root.classList.remove("pointer-events-none");
+          if (btn) {
+            btn.setAttribute("aria-expanded", "true");
+            btn.setAttribute("aria-label", "Close menu");
+          }
+        } else {
+          closeNavMobile();
+        }
+      }
+
+      // --- CORE ENGINE ---
+      function route(viewName) {
+        closeNavMobile();
+        const container = document.getElementById("view-container");
+        if (viewName === "archive") {
+          container.innerHTML = buildArchiveHTML();
+        } else {
+          container.innerHTML = views[viewName] || views.home;
+        }
+        window.scrollTo(0, 0);
+        requestAnimationFrame(() =>
+          window.dispatchEvent(new Event("scroll")),
+        );
+        initScrollReveal();
+        updateCartUI();
+        if (viewName === "archive") {
+          initArchiveSearch();
+        }
+      }
+
+      function initScrollReveal() {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) entry.target.classList.add("active");
+            });
+          },
+          { threshold: 0.1 },
+        );
+        document
+          .querySelectorAll(".reveal")
+          .forEach((el) => observer.observe(el));
+      }
+
+      // --- CART LOGIC ---
+      let cart = [];
+      function toggleCart() {
+        closeNavMobile();
+        const panel = document.getElementById("cart-content");
+        const bg = document.getElementById("cart-bg");
+        if (panel.classList.contains("translate-x-full")) {
+          closeAuth();
+        }
+        panel.classList.toggle("translate-x-full");
+        bg.classList.toggle("opacity-0");
+        document
+          .getElementById("cart-panel")
+          .classList.toggle("pointer-events-none");
+      }
+
+      function openCart() {
+        closeNavMobile();
+        closeAuth();
+        const panel = document.getElementById("cart-content");
+        const bg = document.getElementById("cart-bg");
+        panel.classList.remove("translate-x-full");
+        bg.classList.remove("opacity-0");
+        document
+          .getElementById("cart-panel")
+          .classList.remove("pointer-events-none");
+      }
+
+      function closeCart() {
+        const panel = document.getElementById("cart-content");
+        const bg = document.getElementById("cart-bg");
+        if (!panel || !bg) return;
+        panel.classList.add("translate-x-full");
+        bg.classList.add("opacity-0");
+        document
+          .getElementById("cart-panel")
+          .classList.add("pointer-events-none");
+      }
+
+      function addToCart(name, price) {
+        cart.push({ name, price });
+        updateCartUI();
+        openCart();
+      }
+
+      function handleDemoCheckout() {
+        window.alert("Checkout is locked for demo purposes.");
+      }
+
+      let authTab = "login";
+      function setAuthTab(tab) {
+        authTab = tab;
+        const loginBtn = document.getElementById("auth-tab-login");
+        const signupBtn = document.getElementById("auth-tab-signup");
+        if (!loginBtn || !signupBtn) return;
+        const activeBorder = "var(--accent)";
+        const inactiveBorder = "transparent";
+        if (tab === "login") {
+          loginBtn.style.borderBottomColor = activeBorder;
+          loginBtn.style.color = "#fff";
+          signupBtn.style.borderBottomColor = inactiveBorder;
+          signupBtn.style.color = "#71717a";
+        } else {
+          signupBtn.style.borderBottomColor = activeBorder;
+          signupBtn.style.color = "#fff";
+          loginBtn.style.borderBottomColor = inactiveBorder;
+          loginBtn.style.color = "#71717a";
+        }
+      }
+
+      function openAuth() {
+        closeNavMobile();
+        closeCart();
+        const panel = document.getElementById("auth-content");
+        const bg = document.getElementById("auth-bg");
+        if (!panel || !bg) return;
+        panel.classList.remove("-translate-x-full");
+        bg.classList.remove("opacity-0");
+        document.getElementById("auth-panel").classList.remove("pointer-events-none");
+      }
+
+      function closeAuth() {
+        const panel = document.getElementById("auth-content");
+        const bg = document.getElementById("auth-bg");
+        if (!panel || !bg) return;
+        panel.classList.add("-translate-x-full");
+        bg.classList.add("opacity-0");
+        document.getElementById("auth-panel").classList.add("pointer-events-none");
+      }
+
+      function handleAuthDemoSubmit() {
+        const phone = (document.getElementById("auth-phone")?.value || "").trim();
+        const mode = authTab === "signup" ? "Sign up" : "Log in";
+        window.alert(
+          `${mode} (demo): no verification is sent. Phone entered: ${phone || "(none)"}`,
+        );
+        closeAuth();
+      }
+
+      function updateCartUI() {
+        document.querySelectorAll(".js-cart-count").forEach((el) => {
+          el.textContent = cart.length;
+        });
+        const itemsList = document.getElementById("cart-items");
+        const checkoutTotal = document.getElementById("checkout-total");
+        const cartSummary = document.getElementById("cart-summary");
+        const cartTotalEl = document.getElementById("cart-total");
+
+        if (cart.length === 0) {
+          itemsList.innerHTML = `<p class="text-zinc-700 text-[10px] uppercase italic tracking-widest">Archive empty.</p>`;
+          if (cartSummary) cartSummary.classList.add("hidden");
+        } else {
+          itemsList.innerHTML = cart
+            .map(
+              (item) => `
+                    <div class="flex justify-between text-[10px] uppercase tracking-widest border-b border-white/5 pb-4">
+                        <span class="text-zinc-400">${item.name}</span>
+                        <span>N$${Number(item.price).toFixed(2)}</span>
+                    </div>
+                `,
+            )
+            .join("");
+          if (cartSummary) cartSummary.classList.remove("hidden");
+        }
+        const total = cart.reduce((sum, item) => sum + item.price, 0);
+        if (checkoutTotal) checkoutTotal.innerText = `N$${total.toFixed(2)}`;
+        if (cartTotalEl) cartTotalEl.innerText = `N$${total.toFixed(2)}`;
+      }
+
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-add-to-cart]");
+        if (!btn) return;
+        e.preventDefault();
+        const name = btn.getAttribute("data-product-name");
+        const price = parseFloat(btn.getAttribute("data-product-price"), 10);
+        if (!name || Number.isNaN(price)) return;
+        addToCart(name, price);
+      });
+
+      // --- INTERACTIVITY ---
+      document.addEventListener("mousemove", (e) => {
+        const xPercent = (e.clientX / window.innerWidth) * 100;
+        const yPercent = (e.clientY / window.innerHeight) * 100;
+        
+        // Yellow Spotlight
+        const spotlight = document.getElementById("spotlight");
+        spotlight.style.setProperty("--x", `${xPercent}%`);
+        spotlight.style.setProperty("--y", `${yPercent}%`);
+
+        // Flashlight Masking & Subtle Parallax
+        document.querySelectorAll('.story-rect').forEach((rect, i) => {
+          const rectData = rect.getBoundingClientRect();
+          const relX = e.clientX - rectData.left;
+          const relY = e.clientY - rectData.top;
+          
+          // Mask Position
+          rect.style.setProperty("--mx", `${relX}px`);
+          rect.style.setProperty("--my", `${relY}px`);
+
+          // Slight movement for parallax feel
+          const shiftX = (xPercent - 50) * 0.05 * (i + 1);
+          const shiftY = (yPercent - 50) * 0.05 * (i + 1);
+          rect.style.transform = `rotate(${rect.dataset.rot || '0'}deg) translate(${shiftX}px, ${shiftY}px)`;
+        });
+      });
+
+      // Initialize rotation data for parallax
+      document.querySelectorAll('.story-rect').forEach(r => {
+        const style = r.getAttribute('style');
+        const match = style.match(/rotate\(([^deg]+)deg\)/);
+        if(match) r.dataset.rot = match[1];
+      });
+
+      initStoryLayerScrollMobile();
+
+      // Initialize
+      route("home");
+    </script>
+  </body>
+</html>
