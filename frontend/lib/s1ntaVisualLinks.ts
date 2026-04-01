@@ -36,7 +36,7 @@ export const S1NTA_VISUAL_LINKS_TEMPLATE: S1ntaVisualLinks = {
   main_visual:
     "https://firebasestorage.googleapis.com/v0/b/prysm-f7606.firebasestorage.app/o/s1nta%2Fvisuals%2Fstory%2Fmain_visual.png?alt=media&token=4a4b7f63-52b7-4749-8882-73f826b1327f",
   group_visual:
-    "https://firebasestorage.googleapis.com/v0/b/prysm-f7606.firebasestorage.app/o/s1nta%2Fvisuals%2Fstory%2Fgroup_visual.png?alt=media&token=c82f6538-d7d9-422b-807d-394c817ee0be", 
+    "https://firebasestorage.googleapis.com/v0/b/prysm-f7606.firebasestorage.app/o/s1nta%2Fvisuals%2Fstory%2Fgroup_visual.png?alt=media&token=c82f6538-d7d9-422b-807d-394c817ee0be",
   logo: "/assets/logo.png",
 };
 
