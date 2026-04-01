@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && firestore.get(/databases/(default)/documents/s1ntausers/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /{allPaths=**} {
+      // Public read allows storefront and visual assets to load.
+      allow read: if true;
+      // Only admins can upload/replace/delete assets.
+      allow write: if isAdmin();
+    }
+  }
+}

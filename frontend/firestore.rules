@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/s1ntausers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/s1ntausers/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // User profile documents (created during signup / updated by user)
+    match /s1ntausers/{uid} {
+      allow create: if isOwner(uid);
+      allow read, update: if isOwner(uid) || isAdmin();
+      allow delete: if false;
+    }
+
+    // Admin phone map (not public)
+    match /s1ntaadmins/{id} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Public storefront catalog
+    match /s1ntaproducts/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Public visual config used by homepage assets
+    match /s1ntavisuals/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Orders: signed-in users can create and see own orders
+    match /s1ntaorders/{id} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // Reviews: public read and create, admin moderation
+    match /s1ntareviews/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Deny everything else by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
