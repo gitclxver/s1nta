@@ -7,8 +7,8 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: "S1NTA | To The World",
-  description: "Single-view Firebase commerce experience",
+  title: "S1NTA",
+  description: "To The World",
 };
 
 export default function RootLayout({ children }) {
