@@ -160,6 +160,62 @@ export default function Home({ forcedRoute = "home" }) {
   }, [routeName]);
 
   useEffect(() => {
+    const layer = document.getElementById("story-layer");
+    if (!layer) return;
+    if (routeName !== "home") {
+      layer
+        .querySelectorAll(".story-rect")
+        .forEach((r) => r.classList.remove("story-scroll-active"));
+      return;
+    }
+
+    const rects = Array.from(layer.querySelectorAll(".story-rect"));
+    if (!rects.length) return;
+
+    const mq = window.matchMedia("(max-width: 767px)");
+    let rafId = 0;
+    let lastIdx = -1;
+
+    const setActiveIdx = (idx) => {
+      if (idx === lastIdx) return;
+      lastIdx = idx;
+      rects.forEach((r, i) => {
+        r.classList.toggle("story-scroll-active", i === idx);
+      });
+    };
+
+    const update = () => {
+      if (!mq.matches) {
+        rects.forEach((r) => r.classList.remove("story-scroll-active"));
+        return;
+      }
+      const doc = Math.max(
+        1,
+        document.documentElement.scrollHeight - window.innerHeight,
+      );
+      const y = window.scrollY || window.pageYOffset;
+      const t = Math.min(1, Math.max(0, y / doc));
+      const idx = Math.min(rects.length - 1, Math.floor(t * rects.length));
+      setActiveIdx(idx);
+    };
+
+    update();
+    const onScroll = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(update);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      rects.forEach((r) => r.classList.remove("story-scroll-active"));
+    };
+  }, [routeName]);
+
+  useEffect(() => {
     setRouteName(forcedRoute);
   }, [forcedRoute]);
 
