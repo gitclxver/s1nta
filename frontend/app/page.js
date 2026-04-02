@@ -160,6 +160,7 @@ export default function Home({ forcedRoute = "home" }) {
   }, [routeName]);
 
   useEffect(() => {
+    if (!isLoaded) return;
     const layer = document.getElementById("story-layer");
     if (!layer) return;
     if (routeName !== "home") {
@@ -213,7 +214,7 @@ export default function Home({ forcedRoute = "home" }) {
       window.removeEventListener("resize", onScroll);
       rects.forEach((r) => r.classList.remove("story-scroll-active"));
     };
-  }, [routeName]);
+  }, [routeName, isLoaded]);
 
   useEffect(() => {
     setRouteName(forcedRoute);
@@ -1620,6 +1621,26 @@ export default function Home({ forcedRoute = "home" }) {
         <div
           className={`absolute left-0 top-0 flex h-full w-full max-w-md flex-col border-r border-white/5 bg-[#050505] p-8 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${authOpen ? "translate-x-0" : "-translate-x-full"}`}
         >
+          <button
+            onClick={() => setAuthOpen(false)}
+            className="absolute right-4 top-4 md:hidden text-zinc-500 hover:text-white"
+            aria-label="Close login"
+            type="button"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-6 w-6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6L18 18" />
+            </svg>
+          </button>
           <div className="mb-8 flex gap-2 border-b border-white/10 pb-1">
             <button
               onClick={() => setAuthTab("login")}
@@ -1691,6 +1712,26 @@ export default function Home({ forcedRoute = "home" }) {
         <div
           className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-white/5 bg-[#050505] p-6 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${cartOpen ? "translate-x-0" : "translate-x-full"}`}
         >
+          <button
+            onClick={() => setCartOpen(false)}
+            className="absolute right-4 top-4 md:hidden text-zinc-500 hover:text-white"
+            aria-label="Close cart"
+            type="button"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-6 w-6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6L18 18" />
+            </svg>
+          </button>
           <div className="flex justify-between items-center mb-12">
             <h2 className="text-[10px] uppercase tracking-[0.5em] font-bold text-zinc-400">
               Archive_Current
