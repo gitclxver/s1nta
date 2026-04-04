@@ -27,6 +27,9 @@ import { S1NTA_VISUAL_LINKS_TEMPLATE } from "@/lib/s1ntaVisualLinks";
 
 const ADMIN_PHONES = ["+264857884817", "+264814989258"];
 const ENABLE_EMAILJS_AT_CHECKOUT = false;
+const MIN_INITIAL_SPLASH_MS = 2000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function Home({ forcedRoute = "home" }) {
   const [routeName, setRouteName] = useState(forcedRoute);
@@ -230,14 +233,31 @@ export default function Home({ forcedRoute = "home" }) {
     let unsub = () => {};
     const init = async () => {
       if (!db) {
+        await sleep(MIN_INITIAL_SPLASH_MS);
         setIsLoaded(true);
         return;
       }
-      const p = await getDocs(collection(db, "s1ntaproducts"));
-      setProducts(p.docs.map((d) => ({ id: d.id, ...d.data() })));
-      const visualsDoc = await getDoc(doc(db, "s1ntavisuals", "default"));
-      if (visualsDoc.exists()) {
-        setVisualLinks((prev) => ({ ...prev, ...visualsDoc.data() }));
+      try {
+        await Promise.all([
+          sleep(MIN_INITIAL_SPLASH_MS),
+          (async () => {
+            const [productsSnap, visualsSnap] = await Promise.all([
+              getDocs(collection(db, "s1ntaproducts")),
+              getDoc(doc(db, "s1ntavisuals", "default")),
+            ]);
+            setProducts(
+              productsSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+            );
+            if (visualsSnap.exists()) {
+              setVisualLinks((prev) => ({
+                ...prev,
+                ...visualsSnap.data(),
+              }));
+            }
+          })(),
+        ]);
+      } catch {
+        showToast("error", "Could not load catalog. Check connection.");
       }
       setIsLoaded(true);
     };
@@ -250,7 +270,28 @@ export default function Home({ forcedRoute = "home" }) {
       });
     }
     return () => unsub();
-  }, []);
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!isLoaded || typeof window === "undefined") return;
+    const urls = new Set();
+    for (const p of products) {
+      for (const img of p.images || []) {
+        const u = normalizeImageUrl(img?.url);
+        if (u) urls.add(u);
+      }
+    }
+    for (const v of Object.values(visualLinks)) {
+      if (typeof v === "string" && v.trim()) {
+        urls.add(normalizeImageUrl(v));
+      }
+    }
+    for (const u of urls) {
+      const im = new Image();
+      im.decoding = "async";
+      im.src = u;
+    }
+  }, [isLoaded, products, visualLinks]);
 
   const total = useMemo(
     () =>
@@ -489,6 +530,47 @@ export default function Home({ forcedRoute = "home" }) {
     setOrders(o.docs.map((d) => ({ id: d.id, ...d.data() })));
     setReviews(r.docs.map((d) => ({ id: d.id, ...d.data() })));
   }, [userProfile]);
+
+  const formatOrderTimestamp = (ts) => {
+    if (!ts) return "—";
+    try {
+      const d =
+        typeof ts.toDate === "function"
+          ? ts.toDate()
+          : new Date(ts.seconds ? ts.seconds * 1000 : ts);
+      return d.toLocaleString();
+    } catch {
+      return "—";
+    }
+  };
+
+  const normalizeOrderItems = (raw) => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const markOrderFulfilled = async (orderId) => {
+    if (!db) return;
+    try {
+      await updateDoc(doc(db, "s1ntaorders", orderId), {
+        status: "fulfilled",
+        fulfilledAt: serverTimestamp(),
+      });
+      await loadAdminData();
+      showToast("success", "Order marked fulfilled.");
+    } catch {
+      showToast("error", "Could not update order.");
+    }
+  };
 
   useEffect(() => {
     if (routeName === "admin" && userProfile?.role === "admin") {
@@ -1259,6 +1341,19 @@ export default function Home({ forcedRoute = "home" }) {
 
         {routeName === "admin" && (
           <section className="mx-auto max-w-5xl px-4 py-32 md:px-6 md:py-40">
+            <div className="mb-12 flex flex-col items-center text-center md:mb-14">
+              <img
+                src={normalizeImageUrl(visualLinks.logo)}
+                alt="S1NTA"
+                className="h-16 w-auto max-w-[200px] object-contain opacity-90 md:h-20 md:max-w-[240px]"
+                onError={(e) => {
+                  e.currentTarget.src = "/assets/logo.png";
+                }}
+              />
+              <p className="mt-4 max-w-md text-[10px] font-light uppercase leading-relaxed tracking-[0.35em] text-zinc-500 md:text-xs md:tracking-[0.4em]">
+                To the World
+              </p>
+            </div>
             {userProfile?.role === "admin" ? (
               <div className="space-y-10">
                 <h2 className="uppercase tracking-[0.6em] text-zinc-500 text-xs">
@@ -1533,20 +1628,127 @@ export default function Home({ forcedRoute = "home" }) {
                 )}
 
                 {adminPane === "orders" && (
-                  <div className="border border-white/10 p-4 space-y-3">
-                    <h3 className="uppercase text-xs tracking-widest">
-                      Orders Pane
+                  <div className="space-y-4 border border-white/10 p-4">
+                    <h3 className="text-xs uppercase tracking-widest">
+                      Orders
                     </h3>
-                    {orders.map((o) => (
-                      <div
-                        key={o.id}
-                        className="border-b border-white/10 pb-2 text-xs uppercase tracking-wider"
-                      >
-                        {o.username} / {o.phone} - N$
-                        {Number(o.total || 0).toFixed(2)} (
-                        {o.status || "pending"})
-                      </div>
-                    ))}
+                    {orders.length === 0 ? (
+                      <p className="text-[10px] uppercase tracking-widest text-zinc-600">
+                        No orders yet.
+                      </p>
+                    ) : (
+                      orders.map((o) => {
+                        const items = normalizeOrderItems(o.items);
+                        const statusRaw = String(
+                          o.status || "pending",
+                        ).toLowerCase();
+                        const isFulfilled = statusRaw === "fulfilled";
+                        return (
+                          <div
+                            key={o.id}
+                            className="border border-white/10 bg-black/30 p-4 text-left"
+                          >
+                            <div className="flex flex-col gap-3 border-b border-white/10 pb-3 md:flex-row md:flex-wrap md:items-start md:justify-between">
+                              <div>
+                                <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                                  Order #
+                                </p>
+                                <p className="break-all font-mono text-xs text-white">
+                                  {o.id}
+                                </p>
+                              </div>
+                              <div
+                                className={`inline-flex w-fit items-center border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${
+                                  isFulfilled
+                                    ? "border-emerald-500/50 text-emerald-400"
+                                    : "border-amber-500/50 text-amber-300"
+                                }`}
+                              >
+                                {isFulfilled ? "Fulfilled" : "Not fulfilled"}
+                              </div>
+                              <div className="text-[10px] uppercase tracking-wider text-zinc-500 md:text-right">
+                                <p>{formatOrderTimestamp(o.createdAt)}</p>
+                              </div>
+                            </div>
+                            <div className="mt-3 space-y-1 text-[11px] text-zinc-300">
+                              <p>
+                                <span className="text-zinc-500">Customer: </span>
+                                {o.username || "—"}
+                              </p>
+                              <p>
+                                <span className="text-zinc-500">Phone: </span>
+                                {o.phone || "—"}
+                              </p>
+                              {o.notes ? (
+                                <p>
+                                  <span className="text-zinc-500">Notes: </span>
+                                  {o.notes}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="mt-4">
+                              <p className="mb-2 text-[10px] uppercase tracking-widest text-zinc-500">
+                                Products ({items.length})
+                              </p>
+                              <ul className="space-y-3">
+                                {items.length === 0 ? (
+                                  <li className="text-[10px] uppercase tracking-widest text-zinc-600">
+                                    No line items stored on this order.
+                                  </li>
+                                ) : (
+                                  items.map((line, li) => (
+                                    <li
+                                      key={`${o.id}-${line.productId}-${line.color}-${li}`}
+                                      className="flex gap-3 border border-white/5 bg-black/40 p-2"
+                                    >
+                                      <img
+                                        src={normalizeImageUrl(line.image)}
+                                        alt=""
+                                        className="h-14 w-14 shrink-0 border border-white/10 object-cover"
+                                        onError={(e) => {
+                                          e.currentTarget.src =
+                                            "/demo/assets/skully.png";
+                                        }}
+                                      />
+                                      <div className="min-w-0 flex-1 text-[10px] uppercase tracking-wider">
+                                        <p className="text-white">
+                                          {line.name || "Product"}
+                                        </p>
+                                        <p className="text-zinc-500">
+                                          Color: {line.color || "—"} · Qty{" "}
+                                          {line.quantity ?? 1}
+                                        </p>
+                                        <p className="mt-1 text-zinc-400">
+                                          N$
+                                          {(
+                                            Number(line.price || 0) *
+                                            Number(line.quantity || 1)
+                                          ).toFixed(2)}
+                                        </p>
+                                      </div>
+                                    </li>
+                                  ))
+                                )}
+                              </ul>
+                            </div>
+                            <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="font-mono text-sm text-[--accent]">
+                                Total N${Number(o.total || 0).toFixed(2)}
+                              </p>
+                              {!isFulfilled ? (
+                                <button
+                                  type="button"
+                                  onClick={() => markOrderFulfilled(o.id)}
+                                  className="border border-emerald-500/50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-400 transition hover:bg-emerald-500/10"
+                                >
+                                  Mark fulfilled
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 )}
 
@@ -1619,11 +1821,11 @@ export default function Home({ forcedRoute = "home" }) {
           onClick={() => setAuthOpen(false)}
         />
         <div
-          className={`absolute left-0 top-0 flex h-full w-full max-w-md flex-col border-r border-white/5 bg-[#050505] p-8 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${authOpen ? "translate-x-0" : "-translate-x-full"}`}
+          className={`absolute left-0 top-0 flex h-full w-full max-w-md flex-col border-r border-white/5 bg-[#050505] shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${authOpen ? "translate-x-0" : "-translate-x-full"}`}
         >
           <button
             onClick={() => setAuthOpen(false)}
-            className="absolute right-4 top-4 md:hidden text-zinc-500 hover:text-white"
+            className="absolute right-4 top-4 z-10 md:hidden text-zinc-500 hover:text-white"
             aria-label="Close login"
             type="button"
           >
@@ -1641,64 +1843,73 @@ export default function Home({ forcedRoute = "home" }) {
               <path d="M6 6L18 18" />
             </svg>
           </button>
-          <div className="mb-8 flex gap-2 border-b border-white/10 pb-1">
+          <div className="flex min-h-0 flex-1 flex-col justify-center px-8 py-10 md:px-0 md:py-0">
+            <div className="mb-8 flex gap-2 border-b border-white/10 pb-1">
+              <button
+                onClick={() => setAuthTab("login")}
+                className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest md:text-xs ${authTab === "login" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
+              >
+                Log in
+              </button>
+              <button
+                onClick={() => setAuthTab("signup")}
+                className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest md:text-xs ${authTab === "signup" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
+              >
+                Sign up
+              </button>
+            </div>
+            <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+              Mobile number
+            </label>
+            <div className="mb-5 flex items-center border-b border-white/15">
+              <span className="py-3.5 pr-2 text-xs font-medium uppercase tracking-widest text-zinc-400">
+                +264
+              </span>
+              <input
+                value={authPhone}
+                maxLength={9}
+                onChange={(e) => setAuthPhone(normalizeNamPhone(e.target.value))}
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                placeholder="81…"
+                className="w-full bg-transparent py-3.5 text-sm uppercase tracking-widest text-white outline-none placeholder:text-zinc-600 md:text-base"
+              />
+            </div>
+            <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+              Password
+            </label>
+            <div className="mb-5 flex items-center border-b border-white/15">
+              <input
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                type={showPassword ? "text" : "password"}
+                autoComplete={
+                  authTab === "signup" ? "new-password" : "current-password"
+                }
+                placeholder="Password"
+                className="w-full bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-zinc-400 hover:text-white"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+            {authMessage && (
+              <p className="mb-4 text-sm leading-snug text-red-400">
+                {authMessage}
+              </p>
+            )}
             <button
-              onClick={() => setAuthTab("login")}
-              className={`flex-1 border-b-2 py-3 text-[9px] font-bold uppercase tracking-widest ${authTab === "login" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
+              onClick={handleAuthSubmit}
+              className="w-full bg-white py-4 text-xs font-black uppercase tracking-[0.35em] text-black transition hover:bg-[--accent] md:py-5 md:tracking-[0.4em]"
             >
-              Log in
-            </button>
-            <button
-              onClick={() => setAuthTab("signup")}
-              className={`flex-1 border-b-2 py-3 text-[9px] font-bold uppercase tracking-widest ${authTab === "signup" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
-            >
-              Sign up
+              Continue
             </button>
           </div>
-          <label className="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600">
-            Mobile number
-          </label>
-          <div className="mb-4 flex items-center border-b border-white/10">
-            <span className="py-4 pr-2 text-[10px] uppercase tracking-widest text-zinc-500">
-              +264
-            </span>
-            <input
-              value={authPhone}
-              maxLength={9}
-              onChange={(e) => setAuthPhone(normalizeNamPhone(e.target.value))}
-              type="tel"
-              placeholder="81..."
-              className="w-full bg-transparent py-4 text-[10px] uppercase tracking-widest outline-none"
-            />
-          </div>
-          <label className="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600">
-            Password
-          </label>
-          <div className="mb-4 flex items-center border-b border-white/10">
-            <input
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-              type={showPassword ? "text" : "password"}
-              placeholder="Password"
-              className="w-full bg-transparent py-4 text-[10px] tracking-wide outline-none"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((s) => !s)}
-              className="text-[9px] uppercase tracking-widest text-zinc-500 hover:text-white"
-            >
-              {showPassword ? "Hide" : "Show"}
-            </button>
-          </div>
-          {authMessage && (
-            <p className="text-[10px] text-red-400 mb-3">{authMessage}</p>
-          )}
-          <button
-            onClick={handleAuthSubmit}
-            className="mt-auto w-full bg-white py-5 text-[10px] font-black uppercase tracking-[0.4em] text-black hover:bg-[--accent]"
-          >
-            Continue
-          </button>
         </div>
       </div>
 
