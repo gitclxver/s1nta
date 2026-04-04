@@ -272,7 +272,7 @@
       </div>
       <div class="story-rect w-64 h-80 top-[10%] left-[50%]" style="transform: rotate(2deg);">
         <img src="demo/assets/image_4.png" alt="" onerror="this.style.display='none'">
-        <div class="story-content-fallback">Archive_04</div>
+        <div class="story-content-fallback">Shop_04</div>
       </div>
     </div>
 
@@ -298,9 +298,9 @@
       >
         <a
           href="#"
-          onclick="route('archive'); return false;"
+          onclick="route('shop'); return false;"
           class="transition-colors hover:text-[--accent]"
-          >Archive</a
+          >Shop</a
         >
         <a
           href="#"
@@ -357,9 +357,9 @@
         <div class="flex flex-col gap-8 text-[10px] font-light uppercase tracking-[0.35em]">
           <a
             href="#"
-            onclick="route('archive'); closeNavMobile(); return false;"
+            onclick="route('shop'); closeNavMobile(); return false;"
             class="border-b border-white/5 pb-4 transition-colors hover:text-[--accent]"
-            >Archive</a
+            >Shop</a
           >
           <a
             href="#"
@@ -458,7 +458,7 @@
           <h2
             class="text-[10px] uppercase tracking-[0.5em] font-bold text-zinc-400"
           >
-            Archive_Current
+            Shop_Current
           </h2>
           <button
             onclick="toggleCart()"
@@ -472,7 +472,7 @@
           class="grow space-y-8 overflow-y-auto custom-scrollbar"
         >
           <p class="text-zinc-700 text-[10px] uppercase tracking-widest italic">
-            Archive empty.
+            Shop empty.
           </p>
         </div>
         <div id="cart-summary" class="hidden border-t border-white/5 pt-6">
@@ -499,7 +499,7 @@
     </div>
 
     <script>
-      const archiveProducts = [
+      const shopProducts = [
         {
           name: "Skully",
           price: 179.99,
@@ -527,8 +527,8 @@
           .replace(/</g, "&lt;");
       }
 
-      function buildArchiveHTML() {
-        const cards = archiveProducts
+      function buildShopHTML() {
+        const cards = shopProducts
           .map((p) => {
             const searchBlob = escapeAttr(
               `${p.name} ${p.desc}`.toLowerCase(),
@@ -536,8 +536,8 @@
             const priceStr = Number(p.price).toFixed(2);
             return `
             <article
-              class="archive-product group glow-hover border border-white/5 p-4 transition-all duration-700 md:p-6"
-              data-archive-search="${searchBlob}"
+              class="shop-product group glow-hover border border-white/5 p-4 transition-all duration-700 md:p-6"
+              data-shop-search="${searchBlob}"
             >
               <div class="relative mx-auto aspect-square w-full max-w-[min(92vw,min(38vh,320px))] overflow-hidden bg-[#050505] md:max-w-[min(100%,min(40.6vh,364px))] lg:max-w-[min(100%,min(47.6vh,434px))]">
                 <img
@@ -571,15 +571,15 @@
                 <section class="page-enter mx-auto max-w-[1320px] px-4 py-24 md:px-6 md:py-40">
                     <div class="mb-8 flex flex-col gap-6 border-b border-white/5 pb-6 md:mb-10 md:flex-row md:items-end md:justify-between md:pb-8">
                         <div>
-                            <h2 class="text-[10px] uppercase tracking-[0.8em] text-zinc-500">Archive / All_Arrivals</h2>
+                            <h2 class="text-[10px] uppercase tracking-[0.8em] text-zinc-500">Shop / All_Arrivals</h2>
                             <p class="mt-2 text-[9px] uppercase tracking-widest text-zinc-700">
-                                <span id="archive-result-count">${archiveProducts.length}</span> entries
+                                <span id="shop-result-count">${shopProducts.length}</span> entries
                             </p>
                         </div>
                         <div class="w-full md:max-w-sm">
-                            <label for="archive-search" class="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600">Search</label>
+                            <label for="shop-search" class="mb-2 block text-[9px] uppercase tracking-widest text-zinc-600">Search</label>
                             <input
-                                id="archive-search"
+                                id="shop-search"
                                 type="search"
                                 autocomplete="off"
                                 placeholder="Filter by name, keyword…"
@@ -587,24 +587,24 @@
                             />
                         </div>
                     </div>
-                    <div id="archive-grid" class="grid grid-cols-1 gap-x-8 gap-y-14 md:grid-cols-3 md:gap-x-12 md:gap-y-20 lg:gap-x-24">
+                    <div id="shop-grid" class="grid grid-cols-1 gap-x-8 gap-y-14 md:grid-cols-3 md:gap-x-12 md:gap-y-20 lg:gap-x-24">
                         ${cards}
                     </div>
                 </section>
             `;
       }
 
-      function initArchiveSearch() {
-        const input = document.getElementById("archive-search");
-        const grid = document.getElementById("archive-grid");
-        const countEl = document.getElementById("archive-result-count");
+      function initShopSearch() {
+        const input = document.getElementById("shop-search");
+        const grid = document.getElementById("shop-grid");
+        const countEl = document.getElementById("shop-result-count");
         if (!input || !grid) return;
         const run = () => {
           const q = input.value.trim().toLowerCase();
-          const cards = grid.querySelectorAll(".archive-product");
+          const cards = grid.querySelectorAll(".shop-product");
           let n = 0;
           cards.forEach((card) => {
-            const blob = (card.getAttribute("data-archive-search") || "").toLowerCase();
+            const blob = (card.getAttribute("data-shop-search") || "").toLowerCase();
             const show = !q || blob.includes(q);
             card.classList.toggle("hidden", !show);
             if (show) n += 1;
@@ -654,7 +654,7 @@
                         <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
                           Four panels, one kid in the beanie—same moment, different read. It’s not a layout flex; it’s permission to twist the fit until it feels like yours. That’s the thread: street unity, stubborn love, and a look that moves before the caption does.
                         </p>
-                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                        <button onclick="route('shop')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View shop</button>
                       </div>
                       <div class="reveal relative flex w-full justify-center max-md:max-w-sm md:justify-end">
                         <div class="asset-tilt index-visual-highlight glow-hover w-full max-w-md transition-all duration-700 max-md:mx-auto md:ml-auto">
@@ -681,7 +681,7 @@
                         <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
                           No solo poster child—three bodies sharing the same light, same line on the chest. It reads less like a campaign and more like a night you can already hear: laughter, stance, the brand as shorthand between friends. That’s the movement—not a moodboard.
                         </p>
-                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                        <button onclick="route('shop')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View shop</button>
                       </div>
                     </div>
                   </section>
@@ -694,7 +694,7 @@
                         <p class="mb-10 max-w-sm text-xs uppercase leading-relaxed tracking-wider text-zinc-500 max-md:mx-auto md:mb-12 md:text-sm">
                           Shirts pressed to concrete like a map someone needed you to walk. No hanger, no apology—just spacing, weight, and the story told flat before anyone performs it. The street gets the first draft; the crowd gets the echo.
                         </p>
-                        <button onclick="route('archive')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View archive</button>
+                        <button onclick="route('shop')" class="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black max-md:mx-auto md:px-10 md:py-4 md:text-[10px] md:tracking-[0.5em]">View shop</button>
                       </div>
                       <div class="reveal relative flex w-full justify-center max-md:max-w-sm md:justify-end">
                         <div class="asset-tilt index-visual-highlight glow-hover w-full max-w-md transition-all duration-700 max-md:mx-auto md:ml-auto">
@@ -709,7 +709,7 @@
                 <footer class="px-6 py-24 text-center md:py-60">
                     <div class="reveal">
                         <h2 class="mb-8 text-[10px] uppercase tracking-[0.55em] text-zinc-500 md:mb-12 md:text-xs md:tracking-[0.8em]">On To The Next Chapter</h2>
-                        <button onclick="route('archive')" class="text-2xl font-black uppercase tracking-tighter transition-colors hover:text-[--accent] md:text-3xl">Enter Full Archive</button>
+                        <button onclick="route('shop')" class="text-2xl font-black uppercase tracking-tighter transition-colors hover:text-[--accent] md:text-3xl">Enter Full Shop</button>
                     </div>
                 </footer>
             `,
@@ -841,8 +841,8 @@
       function route(viewName) {
         closeNavMobile();
         const container = document.getElementById("view-container");
-        if (viewName === "archive") {
-          container.innerHTML = buildArchiveHTML();
+        if (viewName === "shop") {
+          container.innerHTML = buildShopHTML();
         } else {
           container.innerHTML = views[viewName] || views.home;
         }
@@ -852,8 +852,8 @@
         );
         initScrollReveal();
         updateCartUI();
-        if (viewName === "archive") {
-          initArchiveSearch();
+        if (viewName === "shop") {
+          initShopSearch();
         }
       }
 
@@ -980,7 +980,7 @@
         const cartTotalEl = document.getElementById("cart-total");
 
         if (cart.length === 0) {
-          itemsList.innerHTML = `<p class="text-zinc-700 text-[10px] uppercase italic tracking-widest">Archive empty.</p>`;
+          itemsList.innerHTML = `<p class="text-zinc-700 text-[10px] uppercase italic tracking-widest">Shop empty.</p>`;
           if (cartSummary) cartSummary.classList.add("hidden");
         } else {
           itemsList.innerHTML = cart

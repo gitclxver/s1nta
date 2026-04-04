@@ -32,6 +32,60 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const CATEGORY_ORDER = ["SHIRTS", "BOTTOMS", "OUTWEAR", "ACCESSORIES"];
 
+/** Size options — chosen only in cart, not on shop cards. */
+const DEFAULT_SIZES = ["S", "M", "L", "XL", "XXL"];
+
+function normalizeCartSize(raw) {
+  const u = String(raw || "").trim().toUpperCase();
+  return DEFAULT_SIZES.includes(u) ? u : DEFAULT_SIZES[0];
+}
+
+/** Per-line `sizes` length must match `quantity`. */
+function cartSizesArray(item) {
+  const qty = Math.max(1, Number(item?.quantity || 1));
+  let arr = Array.isArray(item?.sizes)
+    ? item.sizes.map((s) => normalizeCartSize(s))
+    : [];
+  if (arr.length === 0 && item?.size != null && item.size !== "") {
+    arr = Array(qty).fill(normalizeCartSize(item.size));
+  }
+  while (arr.length < qty) arr.push(DEFAULT_SIZES[0]);
+  return arr.slice(0, qty);
+}
+
+function formatLineSizesSummary(item) {
+  const qty = Math.max(1, Number(item?.quantity || 1));
+  const arr = cartSizesArray(item);
+  const counts = {};
+  for (let i = 0; i < qty; i++) {
+    const s = normalizeCartSize(arr[i]);
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([s, n]) => (n > 1 ? `${s}×${n}` : s))
+    .join(", ");
+}
+
+function migrateCartItemsForSize(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    const qty = Math.max(1, Number(item.quantity || 1));
+    const sizes = cartSizesArray({ ...item, quantity: qty });
+    const { size: _legacy, ...rest } = item;
+    return { ...rest, quantity: qty, sizes };
+  });
+}
+
+function formatOrderSizesField(items) {
+  if (!Array.isArray(items)) return "";
+  return items
+    .map((i) => {
+      const qty = Math.max(1, Number(i.quantity || 1));
+      return `${i.name || "Item"} (${i.color || "—"}): ${formatLineSizesSummary(i)} · qty ${qty}`;
+    })
+    .join(" · ");
+}
+
 function categoryRank(category) {
   const idx = CATEGORY_ORDER.indexOf(category);
   return idx === -1 ? CATEGORY_ORDER.length : idx;
@@ -52,11 +106,81 @@ function sortProductsForCatalog(a, b) {
 function formatItemsForEmail(items) {
   if (!Array.isArray(items)) return "";
   return items
-    .map(
-      (i) =>
-        `${i.name || "Item"} (${i.color || "—"}) ×${i.quantity ?? 1} — N$${(Number(i.price || 0) * Number(i.quantity || 1)).toFixed(2)}`,
-    )
+    .map((i) => {
+      const qty = Math.max(1, Number(i.quantity || 1));
+      const summary = formatLineSizesSummary(i);
+      return `${i.name || "Item"} (${i.color || "—"}) sizes ${summary} · qty ${qty} — N$${(Number(i.price || 0) * qty).toFixed(2)}`;
+    })
     .join("\n");
+}
+
+function CartSizeChipRow({ value, onChange, dense }) {
+  return (
+    <div
+      className={`flex flex-wrap justify-center gap-1 ${dense ? "max-w-[9rem]" : ""}`}
+      role="group"
+      aria-label="Size"
+    >
+      {DEFAULT_SIZES.map((sz) => (
+        <button
+          key={sz}
+          type="button"
+          onClick={() => onChange(sz)}
+          className={`min-h-8 min-w-[1.75rem] rounded-lg border px-1.5 text-[8px] font-bold uppercase leading-none transition ${
+            value === sz
+              ? "border-[--accent] bg-[--accent]/15 text-[--accent]"
+              : "border-white/15 text-zinc-400 hover:border-white/35 hover:text-zinc-200"
+          }`}
+        >
+          {sz}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const cartReadSizeBadge =
+  "inline-flex min-h-8 min-w-[2.75rem] items-center justify-center gap-1.5 rounded-lg border border-white/12 bg-zinc-900/70 px-2.5 shadow-sm backdrop-blur-sm";
+
+/** Read-only size summary shown above the selector in cart. */
+function CartSizeDisplay({ sizes, qty }) {
+  const list = sizes.slice(0, qty);
+  if (qty <= 1) {
+    const sz = list[0] ?? DEFAULT_SIZES[0];
+    return (
+      <div className="flex w-full flex-col items-center gap-1.5">
+        <span className="text-[7px] font-bold uppercase tracking-[0.22em] text-zinc-500">
+          Size
+        </span>
+        <span
+          className={`${cartReadSizeBadge} border-[--accent]/35 bg-[--accent]/10`}
+        >
+          <span className="text-xs font-bold tabular-nums tracking-wide text-[--accent]">
+            {sz}
+          </span>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex w-full flex-col items-center gap-1.5">
+      <span className="text-[7px] font-bold uppercase tracking-[0.22em] text-zinc-500">
+        Sizes
+      </span>
+      <div className="flex w-full flex-wrap items-center justify-center gap-2">
+        {list.map((sz, i) => (
+          <span key={i} className={cartReadSizeBadge}>
+            <span className="text-[8px] font-bold tabular-nums text-zinc-500">
+              #{i + 1}
+            </span>
+            <span className="text-xs font-bold tabular-nums tracking-wide text-[--accent]">
+              {sz}
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function orderCreatedAtMs(data) {
@@ -130,7 +254,13 @@ export default function Home({ forcedRoute = "home" }) {
   const [cart, setCart] = useState(() => {
     if (typeof window === "undefined") return [];
     const saved = window.localStorage.getItem("s1nta_cart");
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      return migrateCartItemsForSize(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return [];
+    }
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [authOpen, setAuthOpen] = useState(false);
@@ -532,14 +662,22 @@ export default function Home({ forcedRoute = "home" }) {
   );
 
   const addToCart = (product, variant) => {
+    const variantColor = variant?.color || "default";
     setCart((prev) => {
-      const variantColor = variant?.color || "default";
       const idx = prev.findIndex(
         (x) => x.productId === product.id && x.color === variantColor,
       );
       if (idx > -1) {
         const next = [...prev];
-        next[idx].quantity += 1;
+        const cur = next[idx];
+        const newQty = cur.quantity + 1;
+        const prevSizes = cartSizesArray(cur);
+        next[idx] = {
+          ...cur,
+          quantity: newQty,
+          sizes: [...prevSizes, DEFAULT_SIZES[0]].slice(0, newQty),
+        };
+        delete next[idx].size;
         return next;
       }
       return [
@@ -550,6 +688,7 @@ export default function Home({ forcedRoute = "home" }) {
           price: Number(product.price || 0),
           color: variantColor,
           quantity: 1,
+          sizes: [DEFAULT_SIZES[0]],
           image: normalizeImageUrl(
             variant?.url ||
               product.images?.[0]?.url ||
@@ -590,7 +729,17 @@ export default function Home({ forcedRoute = "home" }) {
       prev
         .map((item) => {
           if (item.productId === productId && item.color === color) {
-            return { ...item, quantity: item.quantity + delta };
+            const newQty = item.quantity + delta;
+            if (newQty <= 0) return { ...item, quantity: 0 };
+            let sizes = cartSizesArray(item);
+            if (delta > 0) {
+              sizes = [...sizes, DEFAULT_SIZES[0]].slice(0, newQty);
+            } else {
+              sizes = sizes.slice(0, newQty);
+            }
+            const nextItem = { ...item, quantity: newQty, sizes };
+            delete nextItem.size;
+            return nextItem;
           }
           return item;
         })
@@ -603,6 +752,51 @@ export default function Home({ forcedRoute = "home" }) {
       prev.filter(
         (item) => !(item.productId === productId && item.color === color),
       ),
+    );
+  };
+
+  const setCartSlotSize = (productId, color, slotIndex, size) => {
+    const sz = normalizeCartSize(size);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.productId !== productId || item.color !== color)
+          return item;
+        const qty = Math.max(1, item.quantity);
+        const sizes = cartSizesArray(item);
+        const nextSizes = sizes.slice();
+        if (slotIndex >= 0 && slotIndex < qty) {
+          nextSizes[slotIndex] = sz;
+        }
+        const nextItem = { ...item, sizes: nextSizes };
+        delete nextItem.size;
+        return nextItem;
+      }),
+    );
+  };
+
+  const applyAllCartSizes = (productId, color, size) => {
+    const sz = normalizeCartSize(size);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.productId !== productId || item.color !== color)
+          return item;
+        const qty = Math.max(1, item.quantity);
+        const nextItem = {
+          ...item,
+          sizes: Array(qty).fill(sz),
+        };
+        delete nextItem.size;
+        return nextItem;
+      }),
+    );
+  };
+
+  const cartLineSizesValid = (item) => {
+    const qty = Math.max(1, Number(item.quantity || 1));
+    const arr = cartSizesArray(item);
+    return (
+      arr.length === qty &&
+      arr.every((s) => DEFAULT_SIZES.includes(normalizeCartSize(s)))
     );
   };
 
@@ -726,6 +920,13 @@ export default function Home({ forcedRoute = "home" }) {
       showToast("error", "Login required to continue.");
       return;
     }
+    if (cart.some((item) => !cartLineSizesValid(item))) {
+      showToast(
+        "error",
+        "Set a size for each piece in your cart before checkout.",
+      );
+      return;
+    }
     setCartOpen(false);
     setOrdersOpen(false);
     navigateTo("checkout");
@@ -767,6 +968,13 @@ export default function Home({ forcedRoute = "home" }) {
   const finalizeManifest = async () => {
     if (!db || !userProfile || cart.length === 0) return;
     if (orderPlacing) return;
+    if (cart.some((item) => !cartLineSizesValid(item))) {
+      showToast(
+        "error",
+        "Set a size for each piece in your cart before confirming.",
+      );
+      return;
+    }
     setOrderPlacing(true);
 
     const draft = normalizeDisplayUsername(checkoutDisplayName);
@@ -790,12 +998,21 @@ export default function Home({ forcedRoute = "home" }) {
       checkoutDisplayName,
     );
 
+    const cartLines = cart.map((item) => {
+      const qty = Math.max(1, Number(item.quantity || 1));
+      const sizes = cartSizesArray(item);
+      const { size: _legacy, ...rest } = item;
+      return { ...rest, quantity: qty, sizes };
+    });
+    const sizesSummary = formatOrderSizesField(cartLines);
+
     const orderPayload = {
       uid: userProfile.uid,
       username: resolvedUsername,
       phone:
         profileForOrder.phone || `+264${normalizeNamPhone(authPhone)}`,
-      items: cart,
+      items: cartLines,
+      sizes: sizesSummary,
       total,
       notes: checkoutNotes,
       status: "pending",
@@ -838,7 +1055,8 @@ export default function Home({ forcedRoute = "home" }) {
             order_id: orderRef.id,
             username: orderPayload.username,
             phone: orderPayload.phone,
-            items: formatItemsForEmail(cart),
+            items: formatItemsForEmail(cartLines),
+            sizes: sizesSummary,
             total: Number(orderPayload.total).toFixed(2),
             notes: orderPayload.notes || "",
           },
@@ -850,7 +1068,7 @@ export default function Home({ forcedRoute = "home" }) {
           emailError: null,
           emailLastAttemptAt: serverTimestamp(),
         });
-        showToast("success", "Order placed. Confirmation email sent.");
+        showToast("success", "Order confirmed.");
       } catch (e) {
         const detail = formatEmailJsError(e);
         try {
@@ -934,6 +1152,8 @@ export default function Home({ forcedRoute = "home" }) {
         emailLastAttemptAt: serverTimestamp(),
       });
       await loadUserOrders();
+      const retryItems = normalizeOrderItems(order.items);
+      const retrySizes = order.sizes || formatOrderSizesField(retryItems);
       await emailjs.send(
         process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID,
         process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID,
@@ -941,7 +1161,8 @@ export default function Home({ forcedRoute = "home" }) {
           order_id: order.id,
           username: order.username || "",
           phone: order.phone || "",
-          items: formatItemsForEmail(normalizeOrderItems(order.items)),
+          items: formatItemsForEmail(retryItems),
+          sizes: retrySizes,
           total: Number(order.total || 0).toFixed(2),
           notes: order.notes || "",
         },
@@ -953,7 +1174,7 @@ export default function Home({ forcedRoute = "home" }) {
         emailError: null,
         emailLastAttemptAt: serverTimestamp(),
       });
-      showToast("success", "Confirmation email sent.");
+      showToast("success", "Order confirmed.");
     } catch (e) {
       const detail = formatEmailJsError(e);
       try {
@@ -1356,7 +1577,7 @@ export default function Home({ forcedRoute = "home" }) {
                   }}
                   className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
                 >
-                  Shop
+                  SHOP
                 </button>
                 <button
                   onClick={() => {
@@ -1365,7 +1586,7 @@ export default function Home({ forcedRoute = "home" }) {
                   }}
                   className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
                 >
-                  Cart ({cartCount})
+                  CART ({cartCount})
                 </button>
                 {userProfile ? (
                   <button
@@ -1376,7 +1597,7 @@ export default function Home({ forcedRoute = "home" }) {
                     }}
                     className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
                   >
-                    Orders
+                    ORDERS
                   </button>
                 ) : null}
               </>
@@ -1389,7 +1610,7 @@ export default function Home({ forcedRoute = "home" }) {
                 }}
                 className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
               >
-                Log in
+                LOG IN
               </button>
             ) : (
               <button
@@ -1400,7 +1621,7 @@ export default function Home({ forcedRoute = "home" }) {
                 }}
                 className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
               >
-                Account
+                ACCOUNT
               </button>
             )}
           </div>
@@ -1790,9 +2011,9 @@ export default function Home({ forcedRoute = "home" }) {
         )}
 
         {routeName === "checkout" && (
-          <section className="max-w-4xl mx-auto px-6 py-40">
-            <div className="grid md:grid-cols-2 gap-20">
-              <div className="space-y-12">
+          <section className="mx-auto max-w-4xl px-4 py-24 sm:px-6 md:py-40">
+            <div className="grid gap-10 md:grid-cols-2 md:gap-20">
+              <div className="order-2 space-y-10 md:order-1 md:space-y-12">
                 <div>
                   <label className="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">
                     Display name
@@ -1835,7 +2056,8 @@ export default function Home({ forcedRoute = "home" }) {
                       key={`${item.productId}-${item.color}`}
                       className="text-[10px] uppercase tracking-widest text-zinc-400"
                     >
-                      {item.name} ({item.color}) x{item.quantity}
+                      {item.name} ({item.color}) —{" "}
+                      {formatLineSizesSummary(item)} · qty {item.quantity}
                     </p>
                   ))}
                 </div>
@@ -1848,9 +2070,16 @@ export default function Home({ forcedRoute = "home" }) {
                   {orderPlacing ? "Confirming…" : "Confirm order"}
                 </button>
               </div>
-              <div className="bg-[#050505] border border-white/5 p-10 h-fit sticky top-32">
-                <div className="text-3xl font-black font-mono text-[--accent]">
-                  N${total.toFixed(2)}
+              <div className="order-1 h-fit w-full md:order-2 md:sticky md:top-28 lg:top-32">
+                <div className="border border-white/5 bg-[#050505] p-5 sm:p-8 md:p-10">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <span className="min-w-0 text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">
+                      Total price
+                    </span>
+                    <span className="shrink-0 text-right font-mono text-2xl font-black tabular-nums tracking-tight text-[--accent] sm:text-3xl">
+                      N${total.toFixed(2)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2234,6 +2463,12 @@ export default function Home({ forcedRoute = "home" }) {
                                   {o.notes}
                                 </p>
                               ) : null}
+                              {o.sizes ? (
+                                <p>
+                                  <span className="text-zinc-500">Sizes: </span>
+                                  {o.sizes}
+                                </p>
+                              ) : null}
                             </div>
                             <div className="mt-4">
                               <p className="mb-2 text-[10px] uppercase tracking-widest text-zinc-500">
@@ -2264,7 +2499,8 @@ export default function Home({ forcedRoute = "home" }) {
                                           {line.name || "Product"}
                                         </p>
                                         <p className="text-zinc-500">
-                                          Color: {line.color || "—"} · Qty{" "}
+                                          Color: {line.color || "—"} · Sizes:{" "}
+                                          {formatLineSizesSummary(line)} · Qty{" "}
                                           {line.quantity ?? 1}
                                         </p>
                                         <p className="mt-1 text-zinc-400">
@@ -2650,7 +2886,7 @@ export default function Home({ forcedRoute = "home" }) {
           onClick={() => setCartOpen(false)}
         />
         <div
-          className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-white/5 bg-[#050505] p-6 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${cartOpen ? "translate-x-0" : "translate-x-full"}`}
+          className={`absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-white/5 bg-[#050505] p-6 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${cartOpen ? "translate-x-0" : "translate-x-full"}`}
         >
           <button
             onClick={() => setCartOpen(false)}
@@ -2683,62 +2919,156 @@ export default function Home({ forcedRoute = "home" }) {
                 Shop empty.
               </p>
             ) : (
-              cart.map((item) => (
-                <div
-                  key={`${item.productId}-${item.color}`}
-                  className="border-b border-white/5 pb-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <img
-                      src={normalizeImageUrl(item.image)}
-                      alt=""
-                      onError={(e) => {
-                        e.currentTarget.src = "/demo/assets/skully.png";
-                      }}
-                      className="h-14 w-14 object-cover border border-white/10"
-                    />
-                    <div className="flex-1 text-[10px] uppercase tracking-widest">
-                      <p>
-                        {item.name} ({item.color})
-                      </p>
-                      <p className="text-zinc-500">
-                        N${Number(item.price).toFixed(2)}
-                      </p>
+              cart.map((item) => {
+                const qty = Math.max(1, item.quantity);
+                const sizes = cartSizesArray(item);
+                return (
+                  <div
+                    key={`${item.productId}-${item.color}`}
+                    className="border-b border-white/5 pb-5"
+                  >
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={normalizeImageUrl(item.image)}
+                        alt=""
+                        onError={(e) => {
+                          e.currentTarget.src = "/demo/assets/skully.png";
+                        }}
+                        className="h-14 w-14 shrink-0 border border-white/10 object-cover"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] font-bold uppercase leading-tight tracking-widest text-white">
+                          {item.name}
+                        </p>
+                        <p className="mt-0.5 text-[9px] uppercase tracking-wider text-zinc-500">
+                          {item.color}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="font-mono text-[11px] font-bold tabular-nums text-white">
+                          N${(item.price * item.quantity).toFixed(2)}
+                        </p>
+                        <p className="mt-1 text-[8px] uppercase tracking-wider text-zinc-500">
+                          N${Number(item.price).toFixed(2)} each
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-[10px] uppercase tracking-widest">
-                      N${(item.price * item.quantity).toFixed(2)}
-                    </p>
+                    <div className="mt-4">
+                      <CartSizeDisplay sizes={sizes} qty={qty} />
+                    </div>
+                    <div className="mt-4 border-t border-white/10 pt-4">
+                      <p className="mb-3 text-center text-[8px] font-bold uppercase tracking-[0.25em] text-zinc-500">
+                        Select size
+                      </p>
+                      {qty === 1 ? (
+                        <div className="flex flex-wrap justify-center">
+                          <CartSizeChipRow
+                            value={sizes[0]}
+                            onChange={(sz) =>
+                              setCartSlotSize(
+                                item.productId,
+                                item.color,
+                                0,
+                                sz,
+                              )
+                            }
+                            dense={false}
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div>
+                            <p className="mb-2 text-center text-[7px] uppercase tracking-widest text-zinc-600">
+                              Set all pieces to
+                            </p>
+                            <div className="flex flex-wrap justify-center gap-1">
+                              {DEFAULT_SIZES.map((sz) => (
+                                <button
+                                  key={`all-${sz}`}
+                                  type="button"
+                                  onClick={() =>
+                                    applyAllCartSizes(
+                                      item.productId,
+                                      item.color,
+                                      sz,
+                                    )
+                                  }
+                                  className="min-h-8 min-w-[1.75rem] rounded-lg border border-white/15 px-1.5 text-[8px] font-bold uppercase text-zinc-400 transition hover:border-[--accent]/50 hover:text-[--accent]"
+                                >
+                                  {sz}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="space-y-3 border-t border-white/5 pt-3">
+                            <p className="text-center text-[7px] uppercase tracking-widest text-zinc-600">
+                              Or pick per piece
+                            </p>
+                            {sizes.slice(0, qty).map((szVal, si) => (
+                              <div
+                                key={si}
+                                className="flex flex-col items-center gap-2"
+                              >
+                                <span className="text-[8px] font-bold tabular-nums text-zinc-500">
+                                  #{si + 1}
+                                </span>
+                                <CartSizeChipRow
+                                  value={szVal}
+                                  onChange={(sz) =>
+                                    setCartSlotSize(
+                                      item.productId,
+                                      item.color,
+                                      si,
+                                      sz,
+                                    )
+                                  }
+                                  dense={false}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
+                      <div className="inline-flex items-stretch overflow-hidden rounded-md border border-white/15 bg-black/50">
+                        <button
+                          type="button"
+                          aria-label="Decrease quantity"
+                          className="px-3 py-2.5 text-base leading-none text-zinc-400 transition hover:bg-white/5 hover:text-white"
+                          onClick={() =>
+                            updateCartQuantity(item.productId, item.color, -1)
+                          }
+                        >
+                          −
+                        </button>
+                        <span className="flex min-w-[2.5rem] items-center justify-center border-x border-white/10 font-mono text-[11px] tabular-nums text-white">
+                          {item.quantity}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Increase quantity"
+                          className="px-3 py-2.5 text-base leading-none text-zinc-400 transition hover:bg-white/5 hover:text-white"
+                          onClick={() =>
+                            updateCartQuantity(item.productId, item.color, 1)
+                          }
+                        >
+                          +
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          removeCartItem(item.productId, item.color)
+                        }
+                        className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-red-400/90 transition hover:text-red-300"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-3 flex items-center gap-2 text-[10px] uppercase tracking-widest">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateCartQuantity(item.productId, item.color, -1)
-                      }
-                      className="border border-white/20 px-2 py-1"
-                    >
-                      -
-                    </button>
-                    <span>{item.quantity}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateCartQuantity(item.productId, item.color, 1)
-                      }
-                      className="border border-white/20 px-2 py-1"
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeCartItem(item.productId, item.color)}
-                      className="ml-auto border border-red-400/40 px-2 py-1 text-red-300"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
           <div className="pt-8 border-t border-white/5">
@@ -2840,7 +3170,9 @@ export default function Home({ forcedRoute = "home" }) {
                             className="flex justify-between gap-2 text-[10px] uppercase tracking-wider text-zinc-300"
                           >
                             <span>
-                              {line.name} ({line.color}) ×{line.quantity ?? 1}
+                              {line.name} ({line.color}) —{" "}
+                              {formatLineSizesSummary(line)} ×
+                              {line.quantity ?? 1}
                             </span>
                             <span className="shrink-0 text-zinc-500">
                               N$
@@ -2867,7 +3199,7 @@ export default function Home({ forcedRoute = "home" }) {
                           >
                             ✓
                           </span>
-                          Email sent
+                          Order confirmed
                         </div>
                       ) : emailStatus === "sending" ? (
                         <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-amber-300">
