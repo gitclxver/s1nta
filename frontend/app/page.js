@@ -21,15 +21,107 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { S1NTA_VISUAL_LINKS_TEMPLATE } from "@/lib/s1ntaVisualLinks";
 
-const ADMIN_PHONES = ["+264857884817", "+264814989258"];
-const ENABLE_EMAILJS_AT_CHECKOUT = false;
-const MIN_INITIAL_SPLASH_MS = 2000;
+const MIN_INITIAL_SPLASH_MS = 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const CATEGORY_ORDER = ["SHIRTS", "BOTTOMS", "OUTWEAR", "ACCESSORIES"];
+
+function categoryRank(category) {
+  const idx = CATEGORY_ORDER.indexOf(category);
+  return idx === -1 ? CATEGORY_ORDER.length : idx;
+}
+
+/** New arrivals first, then category order, then name. */
+function sortProductsForCatalog(a, b) {
+  const na = a.newArrival === true ? 1 : 0;
+  const nb = b.newArrival === true ? 1 : 0;
+  if (nb !== na) return nb - na;
+  const categoryA = (a.category || "UNCATEGORIZED").toUpperCase();
+  const categoryB = (b.category || "UNCATEGORIZED").toUpperCase();
+  const categoryDiff = categoryRank(categoryA) - categoryRank(categoryB);
+  if (categoryDiff !== 0) return categoryDiff;
+  return String(a.name || "").localeCompare(String(b.name || ""));
+}
+
+function formatItemsForEmail(items) {
+  if (!Array.isArray(items)) return "";
+  return items
+    .map(
+      (i) =>
+        `${i.name || "Item"} (${i.color || "—"}) ×${i.quantity ?? 1} — N$${(Number(i.price || 0) * Number(i.quantity || 1)).toFixed(2)}`,
+    )
+    .join("\n");
+}
+
+function orderCreatedAtMs(data) {
+  const ts = data?.createdAt;
+  if (!ts) return 0;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (typeof ts.toDate === "function") return ts.toDate().getTime();
+  if (typeof ts.seconds === "number") return ts.seconds * 1000;
+  return 0;
+}
+
+function formatEmailJsError(e) {
+  const raw = e?.text ?? e?.message ?? "";
+  if (typeof raw === "string" && raw.trim()) {
+    const t = raw.trim();
+    try {
+      const parsed = JSON.parse(t);
+      const msg = parsed?.message ?? parsed?.error ?? parsed?.txt;
+      if (msg != null && String(msg).trim())
+        return String(msg).trim().slice(0, 280);
+    } catch {
+      /* plain text */
+    }
+    return t.slice(0, 280);
+  }
+  if (e?.message) return String(e.message).slice(0, 280);
+  return "Send failed";
+}
+
+function normalizeDisplayUsername(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function isValidDisplayUsername(s) {
+  const t = normalizeDisplayUsername(s);
+  if (t.length < 2 || t.length > 32) return false;
+  return /^[\p{L}\p{N}][\p{L}\p{N} _.-]*$/u.test(t);
+}
+
+/** Input hint: legacy profiles used phone as username — treat as unset for the display-name field. */
+function displayNameFieldValue(profile) {
+  if (!profile?.username) return "";
+  const phone = profile.phone || "";
+  if (phone && profile.username === phone) return "";
+  return profile.username;
+}
+
+function orderDisplayUsername(profile, checkoutDraft) {
+  const draft = normalizeDisplayUsername(checkoutDraft);
+  if (isValidDisplayUsername(draft)) return draft;
+  const stored = profile?.username;
+  const phone = profile?.phone || "";
+  if (stored && phone && stored !== phone) return stored;
+  if (stored && !phone) return stored;
+  return phone || "Customer";
+}
+
+function reviewDisplayUsername(profile) {
+  const v = displayNameFieldValue(profile);
+  const n = normalizeDisplayUsername(v);
+  if (isValidDisplayUsername(n)) return n;
+  return "Anonymous";
+}
 
 export default function Home({ forcedRoute = "home" }) {
   const [routeName, setRouteName] = useState(forcedRoute);
@@ -43,10 +135,22 @@ export default function Home({ forcedRoute = "home" }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [authOpen, setAuthOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  const [userOrders, setUserOrders] = useState([]);
+  const [userOrdersError, setUserOrdersError] = useState(null);
+  const [userOrdersLoading, setUserOrdersLoading] = useState(false);
+  const [orderPlacing, setOrderPlacing] = useState(false);
   const [activeCategoryFilter, setActiveCategoryFilter] = useState("ALL");
   const [authTab, setAuthTab] = useState("login");
+  const [authPaneMode, setAuthPaneMode] = useState("main");
   const [authPhone, setAuthPhone] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [accountDisplayName, setAccountDisplayName] = useState("");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [checkoutDisplayName, setCheckoutDisplayName] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [userProfile, setUserProfile] = useState(null);
   const [checkoutNotes, setCheckoutNotes] = useState("");
@@ -57,6 +161,7 @@ export default function Home({ forcedRoute = "home" }) {
   const [adminProductName, setAdminProductName] = useState("");
   const [adminProductPrice, setAdminProductPrice] = useState("");
   const [adminProductCategory, setAdminProductCategory] = useState("SHIRTS");
+  const [adminProductNewArrival, setAdminProductNewArrival] = useState(false);
   const [adminColorRows, setAdminColorRows] = useState([
     { color: "", url: "" },
   ]);
@@ -70,11 +175,13 @@ export default function Home({ forcedRoute = "home" }) {
   const [visualLinks, setVisualLinks] = useState(S1NTA_VISUAL_LINKS_TEMPLATE);
   const [routeLoading, setRouteLoading] = useState(false);
   const routeTimerRef = useRef(null);
+  const prevRouteNameForCheckoutRef = useRef(routeName);
   const [editingProductId, setEditingProductId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editPrice, setEditPrice] = useState("");
   const [editCategory, setEditCategory] = useState("SHIRTS");
   const [editVisible, setEditVisible] = useState(true);
+  const [editNewArrival, setEditNewArrival] = useState(false);
   const [editColorRows, setEditColorRows] = useState([{ color: "", url: "" }]);
 
   const normalizeNamPhone = (raw) => {
@@ -89,9 +196,85 @@ export default function Home({ forcedRoute = "home" }) {
     setToast({ type, message });
   }, []);
 
+  const isEmailJsConfigured = () =>
+    Boolean(
+      process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY?.trim() &&
+        process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID?.trim() &&
+        process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID?.trim(),
+    );
+
+  const loadUserOrders = useCallback(async () => {
+    if (!db || !userProfile?.uid) {
+      setUserOrders([]);
+      setUserOrdersError(null);
+      setUserOrdersLoading(false);
+      return;
+    }
+    const uid = userProfile.uid;
+    const mapSnap = (snap) =>
+      snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const sortDesc = (rows) =>
+      [...rows].sort((a, b) => orderCreatedAtMs(b) - orderCreatedAtMs(a));
+
+    setUserOrdersLoading(true);
+    setUserOrdersError(null);
+    try {
+      const q = query(
+        collection(db, "s1ntaorders"),
+        where("uid", "==", uid),
+        orderBy("createdAt", "desc"),
+      );
+      const snap = await getDocs(q);
+      setUserOrders(sortDesc(mapSnap(snap)));
+    } catch {
+      try {
+        const qSimple = query(
+          collection(db, "s1ntaorders"),
+          where("uid", "==", uid),
+        );
+        const snap = await getDocs(qSimple);
+        setUserOrders(sortDesc(mapSnap(snap)));
+      } catch (err) {
+        setUserOrders([]);
+        const code = err?.code || "";
+        if (code === "permission-denied") {
+          setUserOrdersError(
+            "Could not load orders (permission denied). Try signing in again.",
+          );
+        } else {
+          setUserOrdersError(
+            "Could not load orders. Check your connection, or deploy the Firestore index for s1ntaorders (uid + createdAt).",
+          );
+        }
+      }
+    } finally {
+      setUserOrdersLoading(false);
+    }
+  }, [userProfile?.uid]);
+
+  const openCartPane = useCallback(() => {
+    setOrdersOpen(false);
+    setCartOpen(true);
+  }, []);
+
+  const openOrdersPane = useCallback(() => {
+    setCartOpen(false);
+    setOrdersOpen(true);
+  }, []);
+
   const navigateTo = useCallback(
-    (nextRoute) => {
+    (nextRoute, options) => {
       if (nextRoute === routeName) return;
+      const instant = options?.instant === true;
+      if (instant) {
+        if (routeTimerRef.current) clearTimeout(routeTimerRef.current);
+        routeTimerRef.current = null;
+        setRouteLoading(false);
+        setRouteName(nextRoute);
+        setMobileMenuOpen(false);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
       setRouteLoading(true);
       if (routeTimerRef.current) clearTimeout(routeTimerRef.current);
       routeTimerRef.current = setTimeout(() => {
@@ -134,6 +317,20 @@ export default function Home({ forcedRoute = "home" }) {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("s1nta_cart", JSON.stringify(cart));
   }, [cart]);
+
+  useEffect(() => {
+    if (!userProfile?.uid) {
+      setUserOrders([]);
+      setUserOrdersError(null);
+      setUserOrdersLoading(false);
+      return;
+    }
+    loadUserOrders();
+  }, [userProfile?.uid, loadUserOrders]);
+
+  useEffect(() => {
+    if (ordersOpen && userProfile?.uid) loadUserOrders();
+  }, [ordersOpen, userProfile?.uid, loadUserOrders]);
 
   useEffect(() => {
     const onMove = (e) => {
@@ -309,16 +506,10 @@ export default function Home({ forcedRoute = "home" }) {
     const base = products
       .filter((p) => p.visible !== false)
       .map((p) => (p.category || "UNCATEGORIZED").toUpperCase());
-    return ["ALL", ...Array.from(new Set(base))];
+    return ["ALL", "NEW ARRIVALS", ...Array.from(new Set(base))];
   }, [products]);
 
   const visibleProducts = useMemo(() => {
-    const categoryOrder = ["SHIRTS", "BOTTOMS", "OUTWEAR", "ACCESSORIES"];
-    const rank = (category) => {
-      const idx = categoryOrder.indexOf(category);
-      return idx === -1 ? categoryOrder.length : idx;
-    };
-
     return products
       .filter((p) => {
         if (p.visible === false) return false;
@@ -327,17 +518,18 @@ export default function Home({ forcedRoute = "home" }) {
           .includes(searchQuery.toLowerCase());
         const category = (p.category || "UNCATEGORIZED").toUpperCase();
         const matchesCategory =
-          activeCategoryFilter === "ALL" || category === activeCategoryFilter;
+          activeCategoryFilter === "NEW ARRIVALS"
+            ? p.newArrival === true
+            : activeCategoryFilter === "ALL" || category === activeCategoryFilter;
         return matchesSearch && matchesCategory;
       })
-      .sort((a, b) => {
-        const categoryA = (a.category || "UNCATEGORIZED").toUpperCase();
-        const categoryB = (b.category || "UNCATEGORIZED").toUpperCase();
-        const categoryDiff = rank(categoryA) - rank(categoryB);
-        if (categoryDiff !== 0) return categoryDiff;
-        return String(a.name || "").localeCompare(String(b.name || ""));
-      });
+      .sort(sortProductsForCatalog);
   }, [products, searchQuery, activeCategoryFilter]);
+
+  const adminSortedProducts = useMemo(
+    () => [...products].sort(sortProductsForCatalog),
+    [products],
+  );
 
   const addToCart = (product, variant) => {
     setCart((prev) => {
@@ -366,7 +558,7 @@ export default function Home({ forcedRoute = "home" }) {
         },
       ];
     });
-    setCartOpen(true);
+    openCartPane();
   };
 
   const cycleProductColor = (productId, direction, images) => {
@@ -426,6 +618,13 @@ export default function Home({ forcedRoute = "home" }) {
       const phone = `+264${local}`;
       const email = `${phone.replace(/\D/g, "")}@app.local`;
       if (authTab === "signup") {
+        const displayName = normalizeDisplayUsername(authDisplayName);
+        if (!isValidDisplayUsername(displayName)) {
+          setAuthMessage(
+            "Choose a display name (2–32 characters: letters, numbers, spaces, - _ .).",
+          );
+          return;
+        }
         const cred = await createUserWithEmailAndPassword(
           auth,
           email,
@@ -433,7 +632,7 @@ export default function Home({ forcedRoute = "home" }) {
         );
         const isAdmin = ADMIN_PHONES.includes(phone);
         await setDoc(doc(db, "s1ntausers", cred.user.uid), {
-          username: phone,
+          username: displayName,
           phone,
           role: isAdmin ? "admin" : "user",
           createdAt: serverTimestamp(),
@@ -454,6 +653,7 @@ export default function Home({ forcedRoute = "home" }) {
         await signInWithEmailAndPassword(auth, email, authPassword);
       }
       setAuthOpen(false);
+      setAuthDisplayName("");
       showToast(
         "success",
         authTab === "signup"
@@ -467,6 +667,58 @@ export default function Home({ forcedRoute = "home" }) {
     }
   };
 
+  const handleResetPasswordSubmit = async () => {
+    setAuthMessage("");
+    const local = normalizeNamPhone(authPhone);
+    if (local.length !== 9) {
+      setAuthMessage("Enter exactly 9 digits after +264.");
+      return;
+    }
+    if (resetNewPassword.length < 6) {
+      setAuthMessage("Password must be at least 6 characters.");
+      return;
+    }
+    if (resetNewPassword !== resetConfirmPassword) {
+      setAuthMessage("Passwords do not match.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/auth/reset-by-phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneLocal: local,
+          newPassword: resetNewPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 404 || data.error === "NOT_FOUND") {
+          setAuthMessage("No account found for this number.");
+        } else if (res.status === 503 || data.error === "SERVER_CONFIG") {
+          setAuthMessage(
+            data.message ||
+              "Password reset is not configured on the server yet.",
+          );
+        } else if (data.error === "WEAK_PASSWORD") {
+          setAuthMessage("Password must be at least 6 characters.");
+        } else {
+          setAuthMessage("Could not reset password. Try again.");
+        }
+        showToast("error", "Password reset failed.");
+        return;
+      }
+      setResetNewPassword("");
+      setResetConfirmPassword("");
+      setAuthPassword("");
+      setAuthPaneMode("main");
+      showToast("success", "Password updated. You can log in now.");
+    } catch {
+      setAuthMessage("Network error. Try again.");
+      showToast("error", "Network error.");
+    }
+  };
+
   const proceedCheckout = () => {
     if (!userProfile) {
       setAuthMessage("Login required to continue");
@@ -475,7 +727,36 @@ export default function Home({ forcedRoute = "home" }) {
       return;
     }
     setCartOpen(false);
+    setOrdersOpen(false);
     navigateTo("checkout");
+  };
+
+  const saveAccountDisplayName = async () => {
+    if (!db || !userProfile) return;
+    const next = normalizeDisplayUsername(accountDisplayName);
+    if (!isValidDisplayUsername(next)) {
+      showToast(
+        "error",
+        "Display name: 2–32 characters (letters, numbers, spaces, - _ .).",
+      );
+      return;
+    }
+    if (next === userProfile.username) {
+      showToast("success", "Display name is already set.");
+      return;
+    }
+    setAccountSaving(true);
+    try {
+      await updateDoc(doc(db, "s1ntausers", userProfile.uid), {
+        username: next,
+      });
+      setUserProfile((p) => (p ? { ...p, username: next } : p));
+      setAccountDisplayName(next);
+      showToast("success", "Display name saved.");
+    } catch {
+      showToast("error", "Could not save display name.");
+    }
+    setAccountSaving(false);
   };
 
   const scrollToNextSection = () => {
@@ -485,34 +766,114 @@ export default function Home({ forcedRoute = "home" }) {
 
   const finalizeManifest = async () => {
     if (!db || !userProfile || cart.length === 0) return;
-    const payload = {
+    if (orderPlacing) return;
+    setOrderPlacing(true);
+
+    const draft = normalizeDisplayUsername(checkoutDisplayName);
+    let profileForOrder = userProfile;
+    if (isValidDisplayUsername(draft) && draft !== userProfile.username) {
+      try {
+        await updateDoc(doc(db, "s1ntausers", userProfile.uid), {
+          username: draft,
+        });
+        profileForOrder = { ...userProfile, username: draft };
+        setUserProfile(profileForOrder);
+      } catch {
+        showToast("error", "Could not save display name. Order not placed.");
+        setOrderPlacing(false);
+        return;
+      }
+    }
+
+    const resolvedUsername = orderDisplayUsername(
+      profileForOrder,
+      checkoutDisplayName,
+    );
+
+    const orderPayload = {
       uid: userProfile.uid,
-      username: userProfile.username || "Guest",
-      phone: userProfile.phone || `+264${normalizeNamPhone(authPhone)}`,
+      username: resolvedUsername,
+      phone:
+        profileForOrder.phone || `+264${normalizeNamPhone(authPhone)}`,
       items: cart,
       total,
       notes: checkoutNotes,
       status: "pending",
       createdAt: serverTimestamp(),
+      emailStatus: "sending",
+      emailError: null,
+      emailSentAt: null,
+      emailLastAttemptAt: serverTimestamp(),
     };
-    await addDoc(collection(db, "s1ntaorders"), payload);
-    if (ENABLE_EMAILJS_AT_CHECKOUT) {
-      await emailjs.send(
-        process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID,
-        process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID,
-        {
-          username: payload.username,
-          phone: payload.phone,
-          items: JSON.stringify(payload.items),
-          total: payload.total.toFixed(2),
-        },
-        { publicKey: process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY },
-      );
+
+    let orderRef;
+    try {
+      orderRef = await addDoc(collection(db, "s1ntaorders"), orderPayload);
+    } catch {
+      showToast("error", "Could not save order.");
+      setOrderPlacing(false);
+      return;
     }
+
+    if (!isEmailJsConfigured()) {
+      try {
+        await updateDoc(orderRef, {
+          emailStatus: "failed",
+          emailError: "Email service not configured (add EmailJS keys to .env).",
+          emailLastAttemptAt: serverTimestamp(),
+        });
+      } catch {
+        /* ignore */
+      }
+      showToast(
+        "error",
+        "Order saved. Add EmailJS credentials to send confirmation emails.",
+      );
+    } else {
+      try {
+        await emailjs.send(
+          process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID,
+          process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID,
+          {
+            order_id: orderRef.id,
+            username: orderPayload.username,
+            phone: orderPayload.phone,
+            items: formatItemsForEmail(cart),
+            total: Number(orderPayload.total).toFixed(2),
+            notes: orderPayload.notes || "",
+          },
+          { publicKey: process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY },
+        );
+        await updateDoc(orderRef, {
+          emailStatus: "sent",
+          emailSentAt: serverTimestamp(),
+          emailError: null,
+          emailLastAttemptAt: serverTimestamp(),
+        });
+        showToast("success", "Order placed. Confirmation email sent.");
+      } catch (e) {
+        const detail = formatEmailJsError(e);
+        try {
+          await updateDoc(orderRef, {
+            emailStatus: "failed",
+            emailError: detail,
+            emailLastAttemptAt: serverTimestamp(),
+          });
+        } catch {
+          /* ignore */
+        }
+        showToast(
+          "error",
+          `Order saved. Email failed:\n${detail}\nResend from Orders.`,
+        );
+      }
+    }
+
     setCart([]);
     setCheckoutNotes("");
-    navigateTo("home");
-    showToast("success", "Order placed successfully.");
+    navigateTo("home", { instant: true });
+    await loadUserOrders();
+    setOrderPlacing(false);
   };
 
   const loadAdminData = useCallback(async () => {
@@ -558,6 +919,57 @@ export default function Home({ forcedRoute = "home" }) {
     return [];
   };
 
+  const retryOrderConfirmationEmail = async (order) => {
+    if (!db || !userProfile || order.uid !== userProfile.uid) return;
+    if (order.emailStatus !== "failed") return;
+    if (!isEmailJsConfigured()) {
+      showToast("error", "Email is not configured.");
+      return;
+    }
+    const orderRef = doc(db, "s1ntaorders", order.id);
+    try {
+      await updateDoc(orderRef, {
+        emailStatus: "sending",
+        emailError: null,
+        emailLastAttemptAt: serverTimestamp(),
+      });
+      await loadUserOrders();
+      await emailjs.send(
+        process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID,
+        process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID,
+        {
+          order_id: order.id,
+          username: order.username || "",
+          phone: order.phone || "",
+          items: formatItemsForEmail(normalizeOrderItems(order.items)),
+          total: Number(order.total || 0).toFixed(2),
+          notes: order.notes || "",
+        },
+        { publicKey: process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY },
+      );
+      await updateDoc(orderRef, {
+        emailStatus: "sent",
+        emailSentAt: serverTimestamp(),
+        emailError: null,
+        emailLastAttemptAt: serverTimestamp(),
+      });
+      showToast("success", "Confirmation email sent.");
+    } catch (e) {
+      const detail = formatEmailJsError(e);
+      try {
+        await updateDoc(orderRef, {
+          emailStatus: "failed",
+          emailError: detail,
+          emailLastAttemptAt: serverTimestamp(),
+        });
+      } catch {
+        /* ignore */
+      }
+      showToast("error", `Email failed:\n${detail}`);
+    }
+    await loadUserOrders();
+  };
+
   const markOrderFulfilled = async (orderId) => {
     if (!db) return;
     try {
@@ -592,11 +1004,13 @@ export default function Home({ forcedRoute = "home" }) {
       images: finalImages,
       category: adminProductCategory,
       visible: true,
+      newArrival: adminProductNewArrival,
       createdAt: serverTimestamp(),
     });
     setAdminProductName("");
     setAdminProductPrice("");
     setAdminProductCategory("SHIRTS");
+    setAdminProductNewArrival(false);
     setAdminColorRows([{ color: "", url: "" }]);
     loadAdminData();
     showToast("success", "Product created.");
@@ -614,6 +1028,21 @@ export default function Home({ forcedRoute = "home" }) {
     );
   };
 
+  const toggleProductNewArrival = async (productId, nextNewArrival) => {
+    if (!db) return;
+    await updateDoc(doc(db, "s1ntaproducts", productId), {
+      newArrival: nextNewArrival,
+      updatedAt: serverTimestamp(),
+    });
+    await loadAdminData();
+    showToast(
+      "success",
+      nextNewArrival
+        ? "Marked as new arrival."
+        : "Removed from new arrivals.",
+    );
+  };
+
   const deleteProduct = async (productId) => {
     if (!db) return;
     await deleteDoc(doc(db, "s1ntaproducts", productId));
@@ -627,6 +1056,7 @@ export default function Home({ forcedRoute = "home" }) {
     setEditPrice(String(product.price ?? ""));
     setEditCategory(product.category || "SHIRTS");
     setEditVisible(product.visible !== false);
+    setEditNewArrival(product.newArrival === true);
     setEditColorRows(
       product.images?.length
         ? product.images.map((img) => ({
@@ -643,6 +1073,7 @@ export default function Home({ forcedRoute = "home" }) {
     setEditPrice("");
     setEditCategory("SHIRTS");
     setEditVisible(true);
+    setEditNewArrival(false);
     setEditColorRows([{ color: "", url: "" }]);
   };
 
@@ -673,6 +1104,7 @@ export default function Home({ forcedRoute = "home" }) {
       price: Number(editPrice || 0),
       category: editCategory,
       visible: editVisible,
+      newArrival: editNewArrival,
       images: images.length
         ? images
         : [{ color: "DEFAULT", url: "/demo/assets/skully.png" }],
@@ -702,7 +1134,7 @@ export default function Home({ forcedRoute = "home" }) {
   const submitReview = async () => {
     if (!db || !reviewInput.trim()) return;
     await addDoc(collection(db, "s1ntareviews"), {
-      username: userProfile?.username || "Anonymous",
+      username: reviewDisplayUsername(userProfile),
       message: reviewInput.trim(),
       visible: true,
       createdAt: serverTimestamp(),
@@ -715,9 +1147,49 @@ export default function Home({ forcedRoute = "home" }) {
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2800);
+    const ms = toast.type === "error" ? 12000 : 2800;
+    const t = setTimeout(() => setToast(null), ms);
     return () => clearTimeout(t);
   }, [toast]);
+
+  const profileUidDep = userProfile?.uid ?? null;
+  const profileUsernameDep = userProfile?.username ?? null;
+  const profilePhoneDep = userProfile?.phone ?? null;
+
+  /* Fixed-length deps: primitives + userProfile (never optional chaining inside the array)
+     so React never sees a changing dependency count after Fast Refresh. */
+  useEffect(() => {
+    if (!authOpen) {
+      setAuthPaneMode("main");
+      setResetNewPassword("");
+      setResetConfirmPassword("");
+      setAuthMessage("");
+      setAuthDisplayName("");
+    } else if (userProfile) {
+      setAccountDisplayName(displayNameFieldValue(userProfile));
+    }
+  }, [
+    authOpen,
+    profileUidDep,
+    profileUsernameDep,
+    profilePhoneDep,
+    userProfile,
+  ]);
+
+  useEffect(() => {
+    const from = prevRouteNameForCheckoutRef.current;
+    prevRouteNameForCheckoutRef.current = routeName;
+    if (routeName !== "checkout" || !userProfile) return;
+    if (from !== "checkout") {
+      setCheckoutDisplayName(displayNameFieldValue(userProfile));
+    }
+  }, [
+    routeName,
+    profileUidDep,
+    profileUsernameDep,
+    profilePhoneDep,
+    userProfile,
+  ]);
 
   if (!isLoaded) {
     return (
@@ -776,7 +1248,7 @@ export default function Home({ forcedRoute = "home" }) {
             src={normalizeImageUrl(visualLinks.background_visual_04)}
             alt=""
           />
-          <div className="story-content-fallback">Archive_04</div>
+          <div className="story-content-fallback">Shop_04</div>
         </div>
         <div
           className="story-rect w-72 h-96 bottom-[8%] right-[25%]"
@@ -786,7 +1258,7 @@ export default function Home({ forcedRoute = "home" }) {
             src={normalizeImageUrl(visualLinks.background_visual_05)}
             alt=""
           />
-          <div className="story-content-fallback">Archive_05</div>
+          <div className="story-content-fallback">Shop_05</div>
         </div>
       </div>
 
@@ -801,17 +1273,26 @@ export default function Home({ forcedRoute = "home" }) {
           {routeName !== "admin" && (
             <>
               <button
-                onClick={() => navigateTo("archive")}
+                onClick={() => navigateTo("shop")}
                 className="hover:text-[--accent]"
               >
-                ARCHIVE
+                SHOP
               </button>
               <button
-                onClick={() => setCartOpen(true)}
+                onClick={() => openCartPane()}
                 className="hover:text-[--accent]"
               >
                 CART ({cartCount})
               </button>
+              {userProfile ? (
+                <button
+                  type="button"
+                  onClick={() => openOrdersPane()}
+                  className="hover:text-[--accent]"
+                >
+                  ORDERS
+                </button>
+              ) : null}
             </>
           )}
           {!userProfile ? (
@@ -823,10 +1304,11 @@ export default function Home({ forcedRoute = "home" }) {
             </button>
           ) : (
             <button
-              onClick={() => auth && signOut(auth)}
+              type="button"
+              onClick={() => setAuthOpen(true)}
               className="hover:text-[--accent]"
             >
-              LOG OUT
+              ACCOUNT
             </button>
           )}
         </div>
@@ -869,22 +1351,34 @@ export default function Home({ forcedRoute = "home" }) {
               <>
                 <button
                   onClick={() => {
-                    navigateTo("archive");
+                    navigateTo("shop");
                     setMobileMenuOpen(false);
                   }}
                   className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
                 >
-                  Archive
+                  Shop
                 </button>
                 <button
                   onClick={() => {
-                    setCartOpen(true);
+                    openCartPane();
                     setMobileMenuOpen(false);
                   }}
                   className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
                 >
                   Cart ({cartCount})
                 </button>
+                {userProfile ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openOrdersPane();
+                      setMobileMenuOpen(false);
+                    }}
+                    className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
+                  >
+                    Orders
+                  </button>
+                ) : null}
               </>
             )}
             {!userProfile ? (
@@ -899,13 +1393,14 @@ export default function Home({ forcedRoute = "home" }) {
               </button>
             ) : (
               <button
+                type="button"
                 onClick={() => {
-                  auth && signOut(auth);
+                  setAuthOpen(true);
                   setMobileMenuOpen(false);
                 }}
                 className="border-b border-white/5 pb-4 text-left transition-colors hover:text-[--accent]"
               >
-                Log out
+                Account
               </button>
             )}
           </div>
@@ -985,10 +1480,10 @@ export default function Home({ forcedRoute = "home" }) {
                     Not just fashion...a new code
                   </p>
                   <button
-                    onClick={() => navigateTo("archive")}
+                    onClick={() => navigateTo("shop")}
                     className="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black"
                   >
-                    View archive
+                    View shop
                   </button>
                 </div>
                 <div className="reveal active relative flex w-full justify-center max-md:max-w-sm md:justify-end">
@@ -1029,10 +1524,10 @@ export default function Home({ forcedRoute = "home" }) {
                     Wear it however TF you want
                   </p>
                   <button
-                    onClick={() => navigateTo("archive")}
+                    onClick={() => navigateTo("shop")}
                     className="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black"
                   >
-                    View archive
+                    View shop
                   </button>
                 </div>
               </div>
@@ -1056,10 +1551,10 @@ export default function Home({ forcedRoute = "home" }) {
                     together.
                   </p>
                   <button
-                    onClick={() => navigateTo("archive")}
+                    onClick={() => navigateTo("shop")}
                     className="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black"
                   >
-                    View archive
+                    View shop
                   </button>
                 </div>
                 <div className="reveal active relative flex w-full justify-center max-md:max-w-sm md:justify-end">
@@ -1100,10 +1595,10 @@ export default function Home({ forcedRoute = "home" }) {
                     Same energy, different frame.
                   </p>
                   <button
-                    onClick={() => navigateTo("archive")}
+                    onClick={() => navigateTo("shop")}
                     className="border border-white/20 px-8 py-3 text-[9px] uppercase tracking-[0.45em] transition-all hover:bg-white hover:text-black"
                   >
-                    View archive
+                    View shop
                   </button>
                 </div>
               </div>
@@ -1115,10 +1610,10 @@ export default function Home({ forcedRoute = "home" }) {
                   ON TO THE NEXT CHAPTER
                 </h2>
                 <button
-                  onClick={() => navigateTo("archive")}
+                  onClick={() => navigateTo("shop")}
                   className="text-2xl font-light uppercase tracking-[0.4em] transition-colors hover:text-[--accent] md:text-3xl"
                 >
-                  EXPLORE ARCHIVE
+                  EXPLORE SHOP
                 </button>
                 <div className="mx-auto mt-8 h-16 w-px bg-white/40" />
                 <p className="mt-8 text-[9px] uppercase tracking-[0.35em] text-zinc-500">
@@ -1140,12 +1635,12 @@ export default function Home({ forcedRoute = "home" }) {
           </>
         )}
 
-        {routeName === "archive" && (
+        {routeName === "shop" && (
           <section className="mx-auto max-w-[1320px] px-4 py-24 md:px-6 md:py-40">
             <div className="mb-8 flex flex-col gap-6 border-b border-white/5 pb-6 md:mb-10 md:flex-row md:items-end md:justify-between">
               <div>
                 <h2 className="text-[10px] uppercase tracking-[0.8em] text-zinc-500">
-                  Archive / All_Arrivals
+                  Shop / All_Arrivals
                 </h2>
                 <p className="mt-2 text-[9px] uppercase tracking-widest text-zinc-700">
                   {visibleProducts.length} entries
@@ -1197,6 +1692,11 @@ export default function Home({ forcedRoute = "home" }) {
                   className="group glow-hover border border-white/5 p-4 transition-all duration-700 md:p-6"
                 >
                   <div className="relative mx-auto aspect-square w-full overflow-hidden bg-[#050505]">
+                    {p.newArrival === true ? (
+                      <span className="pointer-events-none absolute right-2 top-2 z-10 border border-[--accent]/50 bg-black/75 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-[--accent]">
+                        New
+                      </span>
+                    ) : null}
                     {(() => {
                       const images = p.images?.length
                         ? p.images
@@ -1295,6 +1795,22 @@ export default function Home({ forcedRoute = "home" }) {
               <div className="space-y-12">
                 <div>
                   <label className="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">
+                    Display name
+                  </label>
+                  <input
+                    value={checkoutDisplayName}
+                    onChange={(e) => setCheckoutDisplayName(e.target.value)}
+                    maxLength={32}
+                    autoComplete="nickname"
+                    placeholder="How you appear on orders & reviews"
+                    className="w-full bg-transparent border-b border-white/10 py-4 text-[10px] uppercase tracking-widest outline-none placeholder:text-zinc-600"
+                  />
+                  <p className="mt-2 text-[9px] uppercase tracking-widest text-zinc-600">
+                    For display only. We never ask for your email.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[9px] text-zinc-600 uppercase tracking-widest mb-4 block">
                     Phone
                   </label>
                   <input
@@ -1324,10 +1840,12 @@ export default function Home({ forcedRoute = "home" }) {
                   ))}
                 </div>
                 <button
+                  type="button"
+                  disabled={orderPlacing}
                   onClick={finalizeManifest}
-                  className="w-full bg-white text-black py-4 text-[10px] font-black uppercase tracking-[0.4em] hover:bg-[--accent]"
+                  className="w-full bg-white py-4 text-[10px] font-black uppercase tracking-[0.4em] text-black hover:bg-[--accent] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Finalize Manifest
+                  {orderPlacing ? "Confirming…" : "Confirm order"}
                 </button>
               </div>
               <div className="bg-[#050505] border border-white/5 p-10 h-fit sticky top-32">
@@ -1341,19 +1859,6 @@ export default function Home({ forcedRoute = "home" }) {
 
         {routeName === "admin" && (
           <section className="mx-auto max-w-5xl px-4 py-32 md:px-6 md:py-40">
-            <div className="mb-12 flex flex-col items-center text-center md:mb-14">
-              <img
-                src={normalizeImageUrl(visualLinks.logo)}
-                alt="S1NTA"
-                className="h-16 w-auto max-w-[200px] object-contain opacity-90 md:h-20 md:max-w-[240px]"
-                onError={(e) => {
-                  e.currentTarget.src = "/assets/logo.png";
-                }}
-              />
-              <p className="mt-4 max-w-md text-[10px] font-light uppercase leading-relaxed tracking-[0.35em] text-zinc-500 md:text-xs md:tracking-[0.4em]">
-                To the World
-              </p>
-            </div>
             {userProfile?.role === "admin" ? (
               <div className="space-y-10">
                 <h2 className="uppercase tracking-[0.6em] text-zinc-500 text-xs">
@@ -1415,6 +1920,17 @@ export default function Home({ forcedRoute = "home" }) {
                         OUTWEAR
                       </option>
                     </select>
+                    <label className="flex cursor-pointer items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-400">
+                      <input
+                        type="checkbox"
+                        checked={adminProductNewArrival}
+                        onChange={(e) =>
+                          setAdminProductNewArrival(e.target.checked)
+                        }
+                        className="accent-[--accent]"
+                      />
+                      New arrival (sorted first in shop)
+                    </label>
                     <div className="space-y-2">
                       {adminColorRows.map((row, idx) => (
                         <div
@@ -1465,7 +1981,7 @@ export default function Home({ forcedRoute = "home" }) {
                       <h4 className="text-[10px] uppercase tracking-widest text-zinc-500">
                         Current Products
                       </h4>
-                      {products.map((p) => (
+                      {adminSortedProducts.map((p) => (
                         <div
                           key={p.id}
                           className="flex flex-col gap-2 border-b border-white/10 pb-3 md:flex-row md:items-center md:justify-between"
@@ -1509,16 +2025,30 @@ export default function Home({ forcedRoute = "home" }) {
                                   </option>
                                 </select>
                               </div>
-                              <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-400">
-                                <input
-                                  type="checkbox"
-                                  checked={editVisible}
-                                  onChange={(e) =>
-                                    setEditVisible(e.target.checked)
-                                  }
-                                />
-                                Visible in shop
-                              </label>
+                              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-6">
+                                <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-400">
+                                  <input
+                                    type="checkbox"
+                                    checked={editVisible}
+                                    onChange={(e) =>
+                                      setEditVisible(e.target.checked)
+                                    }
+                                    className="accent-[--accent]"
+                                  />
+                                  Visible in shop
+                                </label>
+                                <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-400">
+                                  <input
+                                    type="checkbox"
+                                    checked={editNewArrival}
+                                    onChange={(e) =>
+                                      setEditNewArrival(e.target.checked)
+                                    }
+                                    className="accent-[--accent]"
+                                  />
+                                  New arrival
+                                </label>
+                              </div>
                               <div className="space-y-2">
                                 {editColorRows.map((row, idx) => (
                                   <div
@@ -1586,16 +2116,35 @@ export default function Home({ forcedRoute = "home" }) {
                           ) : (
                             <>
                               <div className="text-[10px] uppercase tracking-wider">
+                                {p.newArrival === true ? (
+                                  <span className="mr-2 text-[--accent]">
+                                    [NEW]
+                                  </span>
+                                ) : null}
                                 {p.name} - N${Number(p.price || 0).toFixed(2)} [
                                 {p.category || "UNCATEGORIZED"}]
                               </div>
-                              <div className="flex gap-2">
+                              <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
                                   onClick={() => startEditProduct(p)}
                                   className="border border-white/20 px-2 py-1 text-[10px] uppercase tracking-widest hover:border-[--accent] hover:text-[--accent]"
                                 >
                                   Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    toggleProductNewArrival(
+                                      p.id,
+                                      p.newArrival !== true,
+                                    )
+                                  }
+                                  className="border border-white/20 px-2 py-1 text-[10px] uppercase tracking-widest hover:border-[--accent] hover:text-[--accent]"
+                                >
+                                  {p.newArrival === true
+                                    ? "Unmark new"
+                                    : "Mark new"}
                                 </button>
                                 <button
                                   type="button"
@@ -1843,72 +2392,252 @@ export default function Home({ forcedRoute = "home" }) {
               <path d="M6 6L18 18" />
             </svg>
           </button>
-          <div className="flex min-h-0 flex-1 flex-col justify-center px-8 py-10 md:px-0 md:py-0">
-            <div className="mb-8 flex gap-2 border-b border-white/10 pb-1">
-              <button
-                onClick={() => setAuthTab("login")}
-                className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest md:text-xs ${authTab === "login" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
-              >
-                Log in
-              </button>
-              <button
-                onClick={() => setAuthTab("signup")}
-                className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest md:text-xs ${authTab === "signup" ? "border-[--accent] text-white" : "border-transparent text-zinc-500"}`}
-              >
-                Sign up
-              </button>
-            </div>
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
-              Mobile number
-            </label>
-            <div className="mb-5 flex items-center border-b border-white/15">
-              <span className="py-3.5 pr-2 text-xs font-medium uppercase tracking-widest text-zinc-400">
-                +264
-              </span>
-              <input
-                value={authPhone}
-                maxLength={9}
-                onChange={(e) => setAuthPhone(normalizeNamPhone(e.target.value))}
-                type="tel"
-                inputMode="numeric"
-                autoComplete="tel-national"
-                placeholder="81…"
-                className="w-full bg-transparent py-3.5 text-sm uppercase tracking-widest text-white outline-none placeholder:text-zinc-600 md:text-base"
+          <div className="flex min-h-0 flex-1 flex-col justify-center px-8 pb-10 pt-14 md:px-0 md:py-0 md:pt-0">
+            <div className="mb-8 flex flex-col items-center text-center">
+              <img
+                src={normalizeImageUrl(visualLinks.logo)}
+                alt="S1NTA"
+                className="h-14 w-auto max-w-[180px] object-contain opacity-90 md:h-16 md:max-w-[200px]"
+                onError={(e) => {
+                  e.currentTarget.src = "/assets/logo.png";
+                }}
               />
-            </div>
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
-              Password
-            </label>
-            <div className="mb-5 flex items-center border-b border-white/15">
-              <input
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                type={showPassword ? "text" : "password"}
-                autoComplete={
-                  authTab === "signup" ? "new-password" : "current-password"
-                }
-                placeholder="Password"
-                className="w-full bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((s) => !s)}
-                className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-zinc-400 hover:text-white"
-              >
-                {showPassword ? "Hide" : "Show"}
-              </button>
-            </div>
-            {authMessage && (
-              <p className="mb-4 text-sm leading-snug text-red-400">
-                {authMessage}
+              <p className="mt-3 max-w-md text-[10px] font-light uppercase leading-relaxed tracking-[0.35em] text-zinc-500 md:mt-4 md:text-xs md:tracking-[0.4em]">
+                To the World
               </p>
+            </div>
+            {userProfile ? (
+              <>
+                <p className="mb-2 text-center text-xs font-bold uppercase tracking-[0.35em] text-white md:text-sm">
+                  Account
+                </p>
+                <p className="mb-6 text-center text-[11px] leading-relaxed text-zinc-500">
+                  View Account Information
+                </p>
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Display name
+                </label>
+                <input
+                  value={accountDisplayName}
+                  onChange={(e) => setAccountDisplayName(e.target.value)}
+                  maxLength={32}
+                  autoComplete="nickname"
+                  placeholder="Username"
+                  className="mb-5 w-full border-b border-white/15 bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+                />
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Mobile number
+                </label>
+                <div className="mb-6 border-b border-white/15 py-3.5 text-sm uppercase tracking-widest text-zinc-500">
+                  {userProfile.phone || "—"}
+                </div>
+                <button
+                  type="button"
+                  onClick={saveAccountDisplayName}
+                  disabled={accountSaving}
+                  className="w-full bg-white py-4 text-xs font-black uppercase tracking-[0.35em] text-black transition hover:bg-[#f5f0c8] disabled:cursor-not-allowed disabled:opacity-50 md:py-5 md:tracking-[0.4em]"
+                >
+                  {accountSaving ? "Saving…" : "Save display name"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    auth && signOut(auth);
+                    setAuthOpen(false);
+                  }}
+                  className="mt-5 w-full border border-white/20 py-4 text-center text-[11px] font-medium uppercase tracking-widest text-zinc-400 transition-colors hover:border-[--accent]/40 hover:text-[#f5f0c8]"
+                >
+                  Log out
+                </button>
+              </>
+            ) : authPaneMode === "reset" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthPaneMode("main");
+                    setAuthMessage("");
+                  }}
+                  className="mb-6 self-start text-[11px] font-medium uppercase tracking-widest text-zinc-500 transition-colors duration-200 hover:text-[#f5f0c8]"
+                >
+                  ← Back to log in
+                </button>
+                <p className="mb-6 text-center text-xs font-bold uppercase tracking-[0.35em] text-white md:text-sm">
+                  Reset password
+                </p>
+                <p className="mb-6 text-center text-[11px] leading-relaxed text-zinc-500">
+                  Enter the mobile number for your account and choose a new
+                  password. No verification step for now.
+                </p>
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Mobile number
+                </label>
+                <div className="mb-5 flex items-center border-b border-white/15">
+                  <span className="py-3.5 pr-2 text-xs font-medium uppercase tracking-widest text-zinc-400">
+                    +264
+                  </span>
+                  <input
+                    value={authPhone}
+                    maxLength={9}
+                    onChange={(e) =>
+                      setAuthPhone(normalizeNamPhone(e.target.value))
+                    }
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    placeholder="81…"
+                    className="w-full bg-transparent py-3.5 text-sm uppercase tracking-widest text-white outline-none placeholder:text-zinc-600 md:text-base"
+                  />
+                </div>
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  New password
+                </label>
+                <div className="mb-5 flex items-center border-b border-white/15">
+                  <input
+                    value={resetNewPassword}
+                    onChange={(e) => setResetNewPassword(e.target.value)}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="New password"
+                    className="w-full bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-zinc-400 transition-colors hover:text-[#f5f0c8]"
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Confirm new password
+                </label>
+                <div className="mb-5 flex items-center border-b border-white/15">
+                  <input
+                    value={resetConfirmPassword}
+                    onChange={(e) => setResetConfirmPassword(e.target.value)}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Confirm password"
+                    className="w-full bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+                  />
+                </div>
+                {authMessage && (
+                  <p className="mb-4 text-sm leading-snug text-red-400">
+                    {authMessage}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleResetPasswordSubmit}
+                  className="w-full bg-white py-4 text-xs font-black uppercase tracking-[0.35em] text-black transition hover:bg-[#f5f0c8] md:py-5 md:tracking-[0.4em]"
+                >
+                  Update password
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="mb-8 flex gap-2 border-b border-white/10 pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setAuthTab("login")}
+                    className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest transition-colors duration-200 md:text-xs ${authTab === "login" ? "border-[--accent] text-white hover:text-[#f5f0c8]" : "border-transparent text-zinc-500 hover:text-[#f5f0c8]"}`}
+                  >
+                    Log in
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthTab("signup")}
+                    className={`flex-1 border-b-2 py-3 text-[11px] font-bold uppercase tracking-widest transition-colors duration-200 md:text-xs ${authTab === "signup" ? "border-[--accent] text-white hover:text-[#f5f0c8]" : "border-transparent text-zinc-500 hover:text-[#f5f0c8]"}`}
+                  >
+                    Sign up
+                  </button>
+                </div>
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Mobile number
+                </label>
+                <div className="mb-5 flex items-center border-b border-white/15">
+                  <span className="py-3.5 pr-2 text-xs font-medium uppercase tracking-widest text-zinc-400">
+                    +264
+                  </span>
+                  <input
+                    value={authPhone}
+                    maxLength={9}
+                    onChange={(e) =>
+                      setAuthPhone(normalizeNamPhone(e.target.value))
+                    }
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    placeholder="81…"
+                    className="w-full bg-transparent py-3.5 text-sm uppercase tracking-widest text-white outline-none placeholder:text-zinc-600 md:text-base"
+                  />
+                </div>
+                {authTab === "signup" ? (
+                  <>
+                    <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                      Display name
+                    </label>
+                    <input
+                      value={authDisplayName}
+                      onChange={(e) => setAuthDisplayName(e.target.value)}
+                      maxLength={32}
+                      autoComplete="nickname"
+                      placeholder="Shown on orders & reviews (not your email)"
+                      className="mb-5 w-full border-b border-white/15 bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+                    />
+                  </>
+                ) : null}
+                <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-zinc-300 md:text-xs">
+                  Password
+                </label>
+                <div className="mb-5 flex items-center border-b border-white/15">
+                  <input
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete={
+                      authTab === "signup" ? "new-password" : "current-password"
+                    }
+                    placeholder="Password"
+                    className="w-full bg-transparent py-3.5 text-sm tracking-wide text-white outline-none placeholder:text-zinc-600 md:text-base"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-zinc-400 transition-colors hover:text-[#f5f0c8]"
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {authMessage && (
+                  <p className="mb-4 text-sm leading-snug text-red-400">
+                    {authMessage}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleAuthSubmit}
+                  className="w-full bg-white py-4 text-xs font-black uppercase tracking-[0.35em] text-black transition hover:bg-[#f5f0c8] md:py-5 md:tracking-[0.4em]"
+                >
+                  Continue
+                </button>
+                {authTab === "login" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthPaneMode("reset");
+                      setAuthMessage("");
+                      setResetNewPassword("");
+                      setResetConfirmPassword("");
+                    }}
+                    className="mt-5 w-full text-center text-[11px] font-medium uppercase tracking-widest text-zinc-500 transition-colors duration-200 hover:text-[#f5f0c8]"
+                  >
+                    Reset password
+                  </button>
+                ) : null}
+              </>
             )}
-            <button
-              onClick={handleAuthSubmit}
-              className="w-full bg-white py-4 text-xs font-black uppercase tracking-[0.35em] text-black transition hover:bg-[--accent] md:py-5 md:tracking-[0.4em]"
-            >
-              Continue
-            </button>
           </div>
         </div>
       </div>
@@ -1945,13 +2674,13 @@ export default function Home({ forcedRoute = "home" }) {
           </button>
           <div className="flex justify-between items-center mb-12">
             <h2 className="text-[10px] uppercase tracking-[0.5em] font-bold text-zinc-400">
-              Archive_Current
+              Shop_Current
             </h2>
           </div>
           <div className="grow space-y-8 overflow-y-auto custom-scrollbar">
             {cart.length === 0 ? (
               <p className="text-zinc-700 text-[10px] uppercase tracking-widest italic">
-                Archive empty.
+                Shop empty.
               </p>
             ) : (
               cart.map((item) => (
@@ -2026,6 +2755,153 @@ export default function Home({ forcedRoute = "home" }) {
         </div>
       </div>
 
+      <div
+        className={`fixed inset-0 z-61 ${ordersOpen && userProfile ? "" : "pointer-events-none"}`}
+      >
+        <div
+          className={`absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity duration-500 ${ordersOpen && userProfile ? "opacity-100" : "opacity-0"}`}
+          onClick={() => setOrdersOpen(false)}
+        />
+        <div
+          className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-white/5 bg-[#050505] p-6 shadow-2xl transition-transform duration-500 pointer-events-auto md:p-12 ${ordersOpen && userProfile ? "translate-x-0" : "translate-x-full"}`}
+        >
+          <button
+            type="button"
+            onClick={() => setOrdersOpen(false)}
+            className="absolute right-4 top-4 md:hidden text-zinc-500 hover:text-white"
+            aria-label="Close orders"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-6 w-6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6L18 18" />
+            </svg>
+          </button>
+          <div className="mb-8 flex items-center justify-between pr-10 md:pr-0">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.5em] text-zinc-400">
+              Your orders
+            </h2>
+          </div>
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto custom-scrollbar pb-6">
+            {!userProfile ? (
+              <p className="text-[10px] uppercase tracking-widest text-zinc-600">
+                Log in to see orders.
+              </p>
+            ) : userOrdersError ? (
+              <div className="space-y-4">
+                <p className="text-[10px] leading-relaxed uppercase tracking-widest text-red-300">
+                  {userOrdersError}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => loadUserOrders()}
+                  className="w-full border border-white/20 py-3 text-[10px] font-bold uppercase tracking-widest text-white transition hover:border-[--accent] hover:text-[--accent]"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : userOrdersLoading ? (
+              <p className="text-[10px] uppercase tracking-widest text-zinc-500">
+                Loading orders…
+              </p>
+            ) : userOrders.length === 0 ? (
+              <p className="text-[10px] uppercase tracking-widest text-zinc-600">
+                No orders yet.
+              </p>
+            ) : (
+              userOrders.map((o) => {
+                const lines = normalizeOrderItems(o.items);
+                const emailStatus = String(o.emailStatus || "").toLowerCase();
+                return (
+                  <div
+                    key={o.id}
+                    className="border border-white/10 bg-black/30 p-4"
+                  >
+                    <p className="font-mono text-[9px] text-zinc-500">
+                      {formatOrderTimestamp(o.createdAt)}
+                    </p>
+                    <ul className="mt-3 space-y-2 border-b border-white/10 pb-3">
+                      {lines.length === 0 ? (
+                        <li className="text-[10px] uppercase text-zinc-600">
+                          (No line items)
+                        </li>
+                      ) : (
+                        lines.map((line, idx) => (
+                          <li
+                            key={`${o.id}-line-${idx}`}
+                            className="flex justify-between gap-2 text-[10px] uppercase tracking-wider text-zinc-300"
+                          >
+                            <span>
+                              {line.name} ({line.color}) ×{line.quantity ?? 1}
+                            </span>
+                            <span className="shrink-0 text-zinc-500">
+                              N$
+                              {(
+                                Number(line.price || 0) *
+                                Number(line.quantity || 1)
+                              ).toFixed(2)}
+                            </span>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="font-mono text-sm text-[--accent]">
+                        Total N${Number(o.total || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="mt-4 border-t border-white/10 pt-3">
+                      {emailStatus === "sent" ? (
+                        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-emerald-400">
+                          <span
+                            className="flex h-6 w-6 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                            aria-hidden="true"
+                          >
+                            ✓
+                          </span>
+                          Email sent
+                        </div>
+                      ) : emailStatus === "sending" ? (
+                        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-amber-300">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                          Pending…
+                        </div>
+                      ) : emailStatus === "failed" ? (
+                        <div className="space-y-2">
+                          <p className="text-[10px] uppercase tracking-widest text-red-300">
+                            Email failed
+                            {o.emailError ? `: ${o.emailError}` : ""}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => retryOrderConfirmationEmail(o)}
+                            className="w-full border border-amber-500/40 py-2 text-[10px] font-bold uppercase tracking-widest text-amber-200 transition hover:bg-amber-500/10"
+                          >
+                            Resend confirmation email
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] uppercase tracking-widest text-zinc-500">
+                          Confirmation status not recorded
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
       {routeName !== "admin" && (
         <div className="fixed bottom-5 right-5 z-70">
           {!reviewOpen ? (
@@ -2079,9 +2955,9 @@ export default function Home({ forcedRoute = "home" }) {
       )}
 
       {toast && (
-        <div className="fixed right-5 top-20 z-80">
+        <div className="pointer-events-none fixed right-5 top-20 z-[110]">
           <div
-            className={`min-w-64 border px-4 py-3 text-[10px] uppercase tracking-widest shadow-2xl ${
+            className={`max-w-md min-w-64 border px-4 py-3 text-[10px] uppercase tracking-widest shadow-2xl whitespace-pre-line wrap-break-word ${
               toast.type === "success"
                 ? "border-emerald-400/40 bg-emerald-950/70 text-emerald-200"
                 : "border-red-400/40 bg-red-950/70 text-red-200"

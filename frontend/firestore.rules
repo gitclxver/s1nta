@@ -18,7 +18,10 @@ service cloud.firestore {
     // User profile documents (created during signup / updated by user)
     match /s1ntausers/{uid} {
       allow create: if isOwner(uid);
-      allow read, update: if isOwner(uid) || isAdmin();
+      allow read: if isOwner(uid) || isAdmin();
+      allow update: if isAdmin()
+        || (isOwner(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["username"]));
       allow delete: if false;
     }
 
@@ -40,11 +43,25 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // Orders: signed-in users can create and see own orders
+    // Orders: owners create/read; admins full control; owners may only patch email fields for retries
     match /s1ntaorders/{id} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
       allow read: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
-      allow update, delete: if isAdmin();
+      allow delete: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          isSignedIn()
+          && resource.data.uid == request.auth.uid
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly([
+              "emailStatus",
+              "emailError",
+              "emailLastAttemptAt",
+              "emailSentAt",
+            ])
+        );
     }
 
     // Reviews: public read and create, admin moderation
